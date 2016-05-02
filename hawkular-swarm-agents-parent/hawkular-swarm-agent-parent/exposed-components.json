@@ -1,0 +1,4 @@
+{"Hawkular Wildfly Swarm Agent": [
+  {"name": "hawkular-wildfly-swarm-agent", "doc": "hawkular-wildfly-swarm-agent-api"},
+  {"name": "hawkular-wildfly-swarm-agent-modules"},
+]}
