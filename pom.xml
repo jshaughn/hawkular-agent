@@ -43,7 +43,7 @@
     <module>hawkular-wildfly-agent-itest-parent</module>
     <module>wildfly-module-installer</module>
     <module>hawkular-wildfly-agent-installer</module>
-    <module>hawkular-wildfly-swarm-agent-parent</module>
+    <module>hawkular-swarm-agents-parent</module>
   </modules>
 
   <scm>
