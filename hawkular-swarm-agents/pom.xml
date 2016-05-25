@@ -33,26 +33,11 @@
   <name>Hawkular Agent: Wildfly Swarm Agent Parent</name>
 
   <properties>
-    <version.swarm.core>1.0.0.Beta7-SNAPSHOT</version.swarm.core>
-    <version.swarm.spi>1.0.0.Beta17</version.swarm.spi>
+    <version.swarm.core>1.0.0.CR3</version.swarm.core>
+    <version.swarm.spi>1.0.0.Final</version.swarm.spi>
     <version.swarm.fraction-plugin>18</version.swarm.fraction-plugin>
-    <version.swarm.plugin>1.0.0.Beta8</version.swarm.plugin>
+    <version.swarm.plugin>1.0.0.CR1</version.swarm.plugin>
   </properties>
-
-  <!-- This goes away when we move off of snapshot -->
-  <repositories>
-    <repository>
-      <id>projectodd-snapshots</id>
-      <name>Project:odd Snapshots from CI</name>
-      <url>https://repository-projectodd.forge.cloudbees.com/snapshot</url>
-      <releases>
-        <enabled>false</enabled>
-      </releases>
-      <snapshots>
-        <enabled>true</enabled>
-      </snapshots>
-    </repository>
-  </repositories>
 
   <dependencyManagement>
     <dependencies>
