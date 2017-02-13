@@ -72,10 +72,8 @@ public class OperationSubsystemStart implements OperationStepHandler {
 
         } catch (ServiceNotFoundException snfe) {
             throw new OperationFailedException("Cannot restart Hawkular Monitor service - it is disabled", snfe);
-        } catch (InterruptedException ie) {
-            newThread.get().interrupt();
-            throw new OperationFailedException("Cannot restart Hawkular Monitor service - interrupted", ie);
         } catch (Exception e) {
+            newThread.get().interrupt();
             throw new OperationFailedException("Cannot restart Hawkular Monitor service", e);
         }
 
