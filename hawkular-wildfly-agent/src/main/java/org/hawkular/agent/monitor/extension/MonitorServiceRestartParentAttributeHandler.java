@@ -28,7 +28,6 @@ import org.jboss.as.controller.PathAddress;
 import org.jboss.as.controller.RestartParentWriteAttributeHandler;
 import org.jboss.as.controller.descriptions.ModelDescriptionConstants;
 import org.jboss.dmr.ModelNode;
-import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceRegistry;
 
@@ -51,11 +50,6 @@ public class MonitorServiceRestartParentAttributeHandler extends RestartParentWr
     @Override
     protected ServiceName getParentServiceName(PathAddress parentAddress) {
         return SubsystemExtension.SERVICE_NAME;
-    }
-
-    @Override
-    protected boolean isResourceServiceRestartAllowed(OperationContext context, ServiceController<?> service) {
-        return true;
     }
 
     @Override

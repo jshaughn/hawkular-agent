@@ -227,6 +227,7 @@ public abstract class AbstractITest {
         OperationBuilder.writeAttribute()
                 .address(addressActual)
                 .attribute(attributeName, value)
+                .allowResourceServiceRestart()
                 .execute(mcc)
                 .assertSuccess();
     }
