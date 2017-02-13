@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,20 +17,15 @@
 package org.hawkular.dmrclient;
 
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Future;
+import java.util.Collections;
+import java.util.Set;
 
 import org.jboss.as.controller.client.ModelControllerClient;
-import org.jboss.as.controller.client.helpers.domain.DeploymentPlanResult;
-import org.jboss.as.controller.client.helpers.domain.DomainDeploymentManager;
-import org.jboss.as.controller.client.helpers.domain.impl.DomainClientImpl;
-import org.jboss.as.controller.client.helpers.standalone.DeploymentAction;
-import org.jboss.as.controller.client.helpers.standalone.DeploymentPlan;
-import org.jboss.as.controller.client.helpers.standalone.ServerDeploymentActionResult;
-import org.jboss.as.controller.client.helpers.standalone.ServerDeploymentPlanResult;
-import org.jboss.as.controller.client.helpers.standalone.impl.ModelControllerClientServerDeploymentManager;
-import org.jboss.dmr.ModelNode;
+import org.wildfly.plugin.core.Deployment;
+import org.wildfly.plugin.core.DeploymentManager;
+import org.wildfly.plugin.core.DeploymentResult;
+import org.wildfly.plugin.core.SimpleDeploymentDescription;
+import org.wildfly.plugin.core.UndeployDescription;
 
 /**
  * Provides convenience methods associated with deployments.
@@ -39,193 +34,161 @@ import org.jboss.dmr.ModelNode;
  */
 public class DeploymentJBossASClient extends JBossASClient {
 
-    public static final String SUBSYSTEM_DEPLOYMENT = "deployment";
-    public static final String ENABLED = "enabled";
-    public static final String CONTENT = "content";
-    public static final String PATH = "path";
-
     public DeploymentJBossASClient(ModelControllerClient client) {
         super(client);
     }
 
-    /**
-     * Checks to see if there is already a deployment with the given name.
-     *
-     * @param name the deployment name to check
-     * @return true if there is a deployment with the given name already in existence
-     * @throws Exception any error
-     */
-    public boolean isDeployment(String name) throws Exception {
-        Address addr = Address.root().add(SUBSYSTEM_DEPLOYMENT, name);
-        return null != readResource(addr);
+    public void enableDeployment(String name, Set<String> serverGroups) throws Exception {
+        enableDisableDeployment(name, true, serverGroups);
     }
 
-    public boolean isDeploymentEnabled(String name) throws Exception {
-        Address addr = Address.root().add(SUBSYSTEM_DEPLOYMENT, name);
-        ModelNode results = readResource(addr);
-        if (results == null) {
-            throw new IllegalArgumentException("There is no deployment with the name: " + name);
-        }
-        boolean enabledFlag = false;
-        if (results.hasDefined(ENABLED)) {
-            ModelNode enabled = results.get(ENABLED);
-            enabledFlag = enabled.asBoolean(false);
-        }
-        return enabledFlag;
+    public void disableDeployment(String name, Set<String> serverGroups) throws Exception {
+        enableDisableDeployment(name, false, serverGroups);
     }
 
-    public void enableDeployment(String name) throws Exception {
-        enableDisableDeployment(name, true);
-    }
+    private void enableDisableDeployment(String name, boolean enable, Set<String> serverGroups) throws Exception {
+        if (serverGroups == null) {
+            serverGroups = Collections.emptySet();
+        }
+        DeploymentManager dm = DeploymentManager.Factory.create(getModelControllerClient());
+        DeploymentResult result;
 
-    public void disableDeployment(String name) throws Exception {
-        enableDisableDeployment(name, false);
-    }
-
-    private void enableDisableDeployment(String name, boolean enable) throws Exception {
-        if (isDeploymentEnabled(name) == enable) {
-            return; // nothing to do - its already in the state we want
+        if (enable) {
+            SimpleDeploymentDescription sdd = SimpleDeploymentDescription.of(name);
+            sdd.addServerGroups(serverGroups);
+            result = dm.deployToRuntime(sdd);
+        } else {
+            UndeployDescription ud = UndeployDescription.of(name);
+            ud.addServerGroups(serverGroups);
+            ud.setRemoveContent(false);
+            result = dm.undeploy(ud);
         }
 
-        Address addr = Address.root().add(SUBSYSTEM_DEPLOYMENT, name);
-        ModelNode request = createWriteAttributeRequest(ENABLED, Boolean.toString(enable), addr);
-        ModelNode results = execute(request);
-        if (!isSuccess(results)) {
-            throw new FailureException(results);
+        if (!result.successful()) {
+            throw new FailureException(result.getFailureMessage());
         }
+
+        return; // everything is OK
+    }
+
+    public void restartDeployment(String name, Set<String> serverGroups) throws Exception {
+        if (serverGroups == null) {
+            serverGroups = Collections.emptySet();
+        }
+        DeploymentManager dm = DeploymentManager.Factory.create(getModelControllerClient());
+        DeploymentResult result;
+
+        SimpleDeploymentDescription sdd = SimpleDeploymentDescription.of(name);
+        sdd.addServerGroups(serverGroups);
+        result = dm.redeployToRuntime(sdd);
+
+        if (!result.successful()) {
+            throw new FailureException(result.getFailureMessage());
+        }
+
         return; // everything is OK
     }
 
     /**
-     * Given the name of a deployment, this returns where the deployment is (specifically,
-     * it returns the PATH of the deployment).
-     *
-     * @param name the name of the deployment
-     * @return the path where the deployment is found
-     *
-     * @throws Exception any error
-     */
-    public String getDeploymentPath(String name) throws Exception {
-        Address addr = Address.root().add(SUBSYSTEM_DEPLOYMENT, name);
-        ModelNode op = createReadAttributeRequest(CONTENT, addr);
-        final ModelNode results = execute(op);
-        if (isSuccess(results)) {
-            ModelNode path;
-            try {
-                path = getResults(results).asList().get(0).asObject().get(PATH);
-            } catch (Exception e) {
-                throw new Exception("Cannot get path associated with deployment [" + name + "]");
-            }
-            if (path != null) {
-                return path.asString();
-            } else {
-                throw new Exception("No path associated with deployment [" + name + "]");
-            }
-        } else {
-            throw new FailureException(results, "Cannot get the deployment path");
-        }
-    }
-
-    /**
      * Uploads the content to the app server's content repository and then deploys the content.
-     * This is to be used for app servers in "standalone" mode.
+     * If this is to be used for app servers in "domain" mode you have to pass in one or more
+     * server groups. If this is to be used to deploy an app in a standalone server, the
+     * server groups should be empty.
      *
      * @param deploymentName name that the content will be known as
      * @param content stream containing the actual content data
      * @param enabled if true, the content will be uploaded and actually deployed;
      *                if false, content will be uploaded to the server, but it won't be deployed in the server runtime
+     * @param serverGroups the server groups where the application will be deployed if in domain mode
+     * @param forceDeploy if true the deployment content is uploaded even if that deployment name already has content
+     *                    (in other words, the new content will overwrite the old). If false, an error will occur if
+     *                    there is already content associated with the deployment name.
      */
-    public void deployStandalone(String deploymentName, InputStream content, boolean enabled) {
-        ModelControllerClientServerDeploymentManager deployMgr;
-        deployMgr = new ModelControllerClientServerDeploymentManager(getModelControllerClient(), false);
-
-        DeploymentPlan plan;
-        if (enabled) {
-            plan = deployMgr.newDeploymentPlan().add(deploymentName, content).andDeploy().build();
-        } else {
-            plan = deployMgr.newDeploymentPlan().add(deploymentName, content).build();
+    public void deploy(String deploymentName, InputStream content, boolean enabled, Set<String> serverGroups,
+            boolean forceDeploy) {
+        if (serverGroups == null) {
+            serverGroups = Collections.emptySet();
         }
 
-        Future<ServerDeploymentPlanResult> future = deployMgr.execute(plan);
-        ServerDeploymentPlanResult results;
+        DeploymentResult result = null;
+
         try {
-            results = future.get();
+            DeploymentManager dm = DeploymentManager.Factory.create(getModelControllerClient());
+            Deployment deployment = Deployment.of(content, deploymentName)
+                    .addServerGroups(serverGroups)
+                    .setEnabled(enabled);
+            if (forceDeploy) {
+                result = dm.forceDeploy(deployment);
+            } else {
+                result = dm.deploy(deployment);
+            }
         } catch (Exception e) {
-            throw new FailureException("Failed to execute standalone deployment plan for [" + deploymentName + "]", e);
-        }
-
-        boolean success = true;
-        ArrayList<Throwable> exceptions = new ArrayList<>();
-        List<DeploymentAction> actions = plan.getDeploymentActions();
-        for (DeploymentAction action : actions) {
-            ServerDeploymentActionResult result = results.getDeploymentActionResult(action.getId());
-            switch (result.getResult()) {
-                case EXECUTED:
-                case CONFIGURATION_MODIFIED_REQUIRES_RESTART: {
-                    success &= true; // if it is already false, we want to keep it as false
-                    break;
-                }
-                case FAILED:
-                case NOT_EXECUTED:
-                case ROLLED_BACK: {
-                    success = false;
-                    Throwable error = result.getDeploymentException();
-                    if (error != null) {
-                        exceptions.add(error);
-                    }
-                    break;
-                }
+            String errMsg;
+            if (serverGroups.isEmpty()) {
+                errMsg = String.format("Failed to deploy [%s] (standalone mode)", deploymentName);
+            } else {
+                errMsg = String.format("Failed to deploy [%s] to server groups: %s", deploymentName, serverGroups);
             }
+            throw new FailureException(errMsg, e);
         }
 
-        if (!success) {
-            StringBuilder errorMsg = new StringBuilder();
-            errorMsg.append("Failed to deploy [").append(deploymentName).append("]");
-            int errorNumber = 1;
-            for (Throwable exception : exceptions) {
-                errorMsg.append('\n').append(errorNumber++).append(": ").append(exception);
+        if (!result.successful()) {
+            String errMsg;
+            if (serverGroups.isEmpty()) {
+                errMsg = String.format("Failed to deploy [%s] (standalone mode)", deploymentName);
+            } else {
+                errMsg = String.format("Failed to deploy [%s] to server groups [%s]", deploymentName, serverGroups);
             }
-            throw new FailureException(errorMsg.toString());
+            throw new FailureException(errMsg + ": " + result.getFailureMessage());
         }
 
-        return; // success
+        return; // everything is OK
     }
 
     /**
-     * Uploads the content to the app server's content repository and then deploys the content.
-     * This is to be used for app servers in "domain" mode.
+     * Undeploys an app. If an empty set of server groups is passed in, this will assume we are operating on a
+     * standalone server.
      *
-     * NOTE: This has not been tested. It also will not throw exceptions if the deployment failed.
-     *       This method needs some TLC to finish it.
-     *
-     * @param deploymentName name that the content will be known as
-     * @param content stream containing the actual content data
-     * @param enabled if true, the content will be uploaded and actually deployed;
-     *                if false, content will be uploaded to the server, but it won't be deployed in the server runtime
+     * @param deploymentName name that the app is known as
+     * @param serverGroups the server groups where the application may already be deployed. If empty,
+     *                     this will assume the app server is in STANDALONE mode.
+     * @param removeContent if true, the content will be removed from the repository; false means the content stays.
      */
-    public void deployDomain(String deploymentName, InputStream content, boolean enabled) {
-        DomainClientImpl domainClient = new DomainClientImpl(getModelControllerClient());
-        DomainDeploymentManager deployMgr = domainClient.getDeploymentManager();
-        org.jboss.as.controller.client.helpers.domain.DeploymentPlan plan;
+    public void undeploy(String deploymentName, Set<String> serverGroups, boolean removeContent) {
+        if (serverGroups == null) {
+            serverGroups = Collections.emptySet();
+        }
+
+        DeploymentResult result = null;
+
         try {
-            if (enabled) {
-                plan = deployMgr.newDeploymentPlan().add(deploymentName, content).andDeploy().build();
+            DeploymentManager dm = DeploymentManager.Factory.create(getModelControllerClient());
+            UndeployDescription undeployDescription = UndeployDescription.of(deploymentName)
+                    .addServerGroups(serverGroups)
+                    .setFailOnMissing(false)
+                    .setRemoveContent(removeContent);
+            result = dm.undeploy(undeployDescription);
+        } catch (Exception e) {
+            String errMsg;
+            if (serverGroups.isEmpty()) {
+                errMsg = String.format("Failed to undeploy [%s] (standalone mode)", deploymentName);
             } else {
-                plan = deployMgr.newDeploymentPlan().add(deploymentName, content).build();
+                errMsg = String.format("Failed to undeploy [%s] from server groups: %s", deploymentName, serverGroups);
             }
-        } catch (Exception e) {
-            throw new FailureException("Cannot build domain deployment plan for [" + deploymentName + "]", e);
+            throw new FailureException(errMsg, e);
         }
 
-        Future<DeploymentPlanResult> future = deployMgr.execute(plan);
-        DeploymentPlanResult results;
-        try {
-            results = future.get();
-        } catch (Exception e) {
-            throw new FailureException("Failed to execute domain deployment plan for [" + deploymentName + "]", e);
+        if (!result.successful()) {
+            String errMsg;
+            if (serverGroups.isEmpty()) {
+                errMsg = String.format("Failed to undeploy [%s] (standalone mode)", deploymentName);
+            } else {
+                errMsg = String.format("Failed to undeploy [%s] from server groups [%s]", deploymentName,
+                        serverGroups);
+            }
+            throw new FailureException(errMsg + ": " + result.getFailureMessage());
         }
 
-        // TODO parse "results" to know if it worked; if failed, throw exception with appropriate error message
-        return;
+        return; // everything is OK
     }
 }

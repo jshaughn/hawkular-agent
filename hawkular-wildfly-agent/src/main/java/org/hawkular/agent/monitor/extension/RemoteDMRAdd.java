@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,13 +16,71 @@
  */
 package org.hawkular.agent.monitor.extension;
 
-import org.jboss.as.controller.AbstractAddStepHandler;
+import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.EndpointConfiguration;
+import org.hawkular.agent.monitor.log.AgentLoggers;
+import org.hawkular.agent.monitor.log.MsgLogger;
+import org.hawkular.agent.monitor.protocol.EndpointService;
+import org.hawkular.agent.monitor.protocol.ProtocolService;
+import org.hawkular.agent.monitor.protocol.ProtocolServices;
+import org.hawkular.agent.monitor.protocol.dmr.DMRNodeLocation;
+import org.hawkular.agent.monitor.protocol.dmr.DMRSession;
+import org.hawkular.agent.monitor.service.MonitorService;
+import org.hawkular.agent.monitor.util.Util;
+import org.hawkular.agent.monitor.util.WildflyCompatibilityUtils;
+import org.jboss.as.controller.OperationContext;
+import org.jboss.as.controller.OperationFailedException;
+import org.jboss.dmr.ModelNode;
 
-public class RemoteDMRAdd extends AbstractAddStepHandler {
+public class RemoteDMRAdd extends MonitorServiceAddStepHandler {
+    private static final MsgLogger log = AgentLoggers.getLogger(RemoteDMRAdd.class);
 
     public static final RemoteDMRAdd INSTANCE = new RemoteDMRAdd();
 
     private RemoteDMRAdd() {
         super(RemoteDMRAttributes.ATTRIBUTES);
+    }
+
+    @Override
+    protected void performRuntime(OperationContext context, ModelNode operation, ModelNode model)
+            throws OperationFailedException {
+        if (context.isBooting()) {
+            return;
+        }
+
+        MonitorService monitorService = getMonitorService(context);
+        if (monitorService == null) {
+            return; // the agent wasn't enabled, nothing to do
+        }
+
+        MonitorServiceConfiguration config = Util.getMonitorServiceConfiguration(context);
+        String newEndpointName = WildflyCompatibilityUtils.getCurrentAddressValue(context, operation);
+
+        // Register the feed under the tenant of the new managed server.
+        // If endpoint has a null tenant then there is nothing to do since it will just reuse the agent's tenant ID
+        EndpointConfiguration endpointConfig = config.getDmrConfiguration().getEndpoints().get(newEndpointName);
+        boolean isEnabled = endpointConfig.isEnabled();
+
+        String newTenantId = endpointConfig.getTenantId();
+        if (newTenantId != null) {
+            try {
+                monitorService.registerFeed(newTenantId, 0);
+            } catch (Exception e) {
+                isEnabled = false;
+                log.warnCannotRegisterFeedForNewManagedServer(newTenantId, newEndpointName, e.toString());
+            }
+        }
+
+        if (isEnabled) {
+            // create a new endpoint service
+            ProtocolServices newServices = monitorService.createProtocolServicesBuilder()
+                    .dmrProtocolService(null, config.getDmrConfiguration()).build();
+            EndpointService<DMRNodeLocation, DMRSession> endpointService = newServices.getDmrProtocolService()
+                    .getEndpointServices().get(newEndpointName);
+
+            // put the new endpoint service in the original protocol services container
+            ProtocolService<DMRNodeLocation, DMRSession> dmrService = monitorService.getProtocolServices()
+                    .getDmrProtocolService();
+            dmrService.add(endpointService);
+        }
     }
 }

@@ -109,7 +109,7 @@ public class AddDatasourceCommand extends AbstractResourcePathCommand<AddDatasou
                     .parentBuilder();
 
         }
-        if (!props.isEmpty()) {
+        if (props!=null && !props.isEmpty()) {
             for (Entry<String, String> prop : props.entrySet()) {
                 batch.add() //
                         .address().segments(dsAdr).segment(dsPropsDmrResourceType, prop.getKey()).parentBuilder() //
@@ -120,7 +120,7 @@ public class AddDatasourceCommand extends AbstractResourcePathCommand<AddDatasou
         OperationResult<?> opResult = batch.execute(controllerClient).assertSuccess();
         setServerRefreshIndicator(opResult, response);
 
-        // TODO replace with endpointService.discoverChildren(parentLocation, childType)
+        // discover the new datasource so it gets placed into inventory
         endpointService.discoverAll();
 
         return null;

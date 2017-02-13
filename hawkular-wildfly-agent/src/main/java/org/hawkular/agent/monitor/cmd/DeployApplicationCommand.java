@@ -16,7 +16,11 @@
  */
 package org.hawkular.agent.monitor.cmd;
 
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.AbstractEndpointConfiguration;
 import org.hawkular.agent.monitor.inventory.ID;
@@ -35,7 +39,7 @@ import org.hawkular.cmdgw.api.DeployApplicationRequest;
 import org.hawkular.cmdgw.api.DeployApplicationResponse;
 import org.hawkular.cmdgw.api.MessageUtils;
 import org.hawkular.dmrclient.DeploymentJBossASClient;
-import org.hawkular.inventory.api.model.CanonicalPath;
+import org.hawkular.inventory.paths.CanonicalPath;
 import org.jboss.as.controller.client.ModelControllerClient;
 
 /**
@@ -43,7 +47,7 @@ import org.jboss.as.controller.client.ModelControllerClient;
  */
 public class DeployApplicationCommand
         extends AbstractResourcePathCommand<DeployApplicationRequest, DeployApplicationResponse> {
-    @SuppressWarnings("unused")
+
     private static final MsgLogger log = AgentLoggers.getLogger(DeployApplicationCommand.class);
     public static final Class<DeployApplicationRequest> REQUEST_CLASS = DeployApplicationRequest.class;
 
@@ -52,16 +56,24 @@ public class DeployApplicationCommand
     }
 
     @Override
-    protected BinaryData execute(ModelControllerClient controllerClient,
+    protected BinaryData execute(
+            ModelControllerClient controllerClient,
             EndpointService<DMRNodeLocation, DMRSession> endpointService,
-            String modelNodePath, BasicMessageWithExtraData<DeployApplicationRequest> envelope,
-            DeployApplicationResponse response, CommandContext context, DMRSession dmrContext)
-                    throws Exception {
+            String modelNodePath,
+            BasicMessageWithExtraData<DeployApplicationRequest> envelope,
+            DeployApplicationResponse response,
+            CommandContext context,
+            DMRSession dmrContext)
+            throws Exception {
+
         DeployApplicationRequest request = envelope.getBasicMessage();
 
         final String resourcePath = request.getResourcePath();
         final String destFileName = request.getDestinationFileName();
         final boolean enabled = (request.getEnabled() == null) ? true : request.getEnabled().booleanValue();
+        final boolean forceDeploy = (request.getForceDeploy() == null) ? true
+                : request.getForceDeploy().booleanValue();
+        final Set<String> serverGroups = convertCsvToSet(request.getServerGroups());
 
         CanonicalPath canonicalPath = CanonicalPath.fromString(request.getResourcePath());
         String resourceId = canonicalPath.ids().getResourcePath().getSegment().getElementId();
@@ -93,9 +105,18 @@ public class DeployApplicationCommand
         response.setDestinationFileName(request.getDestinationFileName());
 
         DeploymentJBossASClient client = new DeploymentJBossASClient(dmrContext.getClient());
-        client.deployStandalone(destFileName, envelope.getBinaryData(), enabled);
+        client.deploy(destFileName, envelope.getBinaryData(), enabled, serverGroups, forceDeploy);
+
+        // run discovery now so we can quickly get the new app in inventory
         endpointService.discoverAll();
         return null;
+    }
+
+    private Set<String> convertCsvToSet(String serverGroups) {
+        if (serverGroups == null || serverGroups.isEmpty()) {
+            return Collections.emptySet();
+        }
+        return new HashSet<>(Arrays.asList(serverGroups.split(",")));
     }
 
     @Override

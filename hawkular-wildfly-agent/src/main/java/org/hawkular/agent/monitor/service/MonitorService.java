@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,11 +21,12 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.io.File;
-import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -33,8 +34,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import javax.net.ssl.SSLContext;
 
@@ -42,14 +41,14 @@ import org.hawkular.agent.monitor.api.Avail;
 import org.hawkular.agent.monitor.api.HawkularWildFlyAgentContext;
 import org.hawkular.agent.monitor.api.HawkularWildFlyAgentContextImpl;
 import org.hawkular.agent.monitor.cmd.FeedCommProcessor;
+import org.hawkular.agent.monitor.cmd.WebSocketClientBuilder;
 import org.hawkular.agent.monitor.diagnostics.Diagnostics;
 import org.hawkular.agent.monitor.diagnostics.DiagnosticsImpl;
 import org.hawkular.agent.monitor.diagnostics.JBossLoggingReporter;
 import org.hawkular.agent.monitor.diagnostics.JBossLoggingReporter.LoggingLevel;
 import org.hawkular.agent.monitor.diagnostics.StorageReporter;
-import org.hawkular.agent.monitor.dynamicprotocol.DynamicProtocolServices;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration;
-import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.DynamicEndpointConfiguration;
+import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.AbstractEndpointConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.EndpointConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.StorageAdapterConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.StorageReportTo;
@@ -74,24 +73,36 @@ import org.hawkular.agent.monitor.storage.InventoryStorageProxy;
 import org.hawkular.agent.monitor.storage.MetricStorageProxy;
 import org.hawkular.agent.monitor.storage.StorageAdapter;
 import org.hawkular.agent.monitor.util.Util;
+import org.hawkular.agent.monitor.util.WildflyCompatibilityUtils;
 import org.hawkular.inventory.api.model.Feed;
 import org.jboss.as.controller.ControlledProcessState;
+import org.jboss.as.controller.ControlledProcessState.State;
 import org.jboss.as.controller.ControlledProcessStateService;
 import org.jboss.as.controller.ModelController;
+import org.jboss.as.controller.OperationContext;
 import org.jboss.as.controller.ProcessType;
 import org.jboss.as.controller.client.ModelControllerClient;
 import org.jboss.as.domain.management.SecurityRealm;
 import org.jboss.as.domain.management.security.SSLContextService;
 import org.jboss.as.host.controller.DomainModelControllerService;
 import org.jboss.as.host.controller.HostControllerEnvironment;
+import org.jboss.as.naming.ManagedReferenceFactory;
+import org.jboss.as.naming.ServiceBasedNamingStore;
+import org.jboss.as.naming.deployment.ContextNames;
+import org.jboss.as.naming.service.BinderService;
 import org.jboss.as.network.OutboundSocketBinding;
 import org.jboss.as.network.SocketBinding;
 import org.jboss.as.server.ServerEnvironment;
 import org.jboss.as.server.ServerEnvironmentService;
 import org.jboss.as.server.Services;
 import org.jboss.logging.Logger;
+import org.jboss.msc.inject.Injector;
+import org.jboss.msc.service.AbstractServiceListener;
 import org.jboss.msc.service.Service;
 import org.jboss.msc.service.ServiceBuilder;
+import org.jboss.msc.service.ServiceController;
+import org.jboss.msc.service.ServiceName;
+import org.jboss.msc.service.ServiceTarget;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
 import org.jboss.msc.service.StopContext;
@@ -99,9 +110,11 @@ import org.jboss.msc.value.InjectedValue;
 
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.ScheduledReporter;
-import com.squareup.okhttp.OkHttpClient;
-import com.squareup.okhttp.Request;
-import com.squareup.okhttp.Response;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
 /**
  * The main Agent service.
@@ -116,28 +129,30 @@ public class MonitorService implements Service<MonitorService> {
      * Builds the runtime configuration, typically out of the boot configuration. It is static so that always stays
      * clear what data it relies on.
      *
-     * On cetrain circumstances, this method may return the {@code bootConfiguration} instance without any modification.
+     * On certain circumstances, this method may return the {@code bootConfiguration} instance without any modification.
      *
      * @param bootConfiguration the boot configuration
      * @param httpSocketBindingValue the httpSocketBindingValue (not available if agent is inside host controller)
      * @param httpsSocketBindingValue the httpsSocketBindingValue (not available if agent is inside host controller)
      * @param serverOutboundSocketBindingValue the serverOutboundSocketBindingValue
-     * @param trustOnlySSLContextValues the serverOutboundSocketBindingValue
      * @return the runtime configuration
      */
     private static MonitorServiceConfiguration buildRuntimeConfiguration(
             MonitorServiceConfiguration bootConfiguration,
             InjectedValue<SocketBinding> httpSocketBindingValue,
             InjectedValue<SocketBinding> httpsSocketBindingValue,
-            InjectedValue<OutboundSocketBinding> serverOutboundSocketBindingValue,
-            Map<String, InjectedValue<SSLContext>> trustOnlySSLContextValues) {
+            InjectedValue<OutboundSocketBinding> serverOutboundSocketBindingValue) {
 
         final MonitorServiceConfiguration.StorageAdapterConfiguration bootStorageAdapter = bootConfiguration
                 .getStorageAdapter();
 
         log.infoStorageAdapterMode(bootStorageAdapter.getType());
+        log.infoTenantId(bootStorageAdapter.getTenantId());
+        if (bootConfiguration.isImmutable()) {
+            log.infoAgentIsImmutable();
+        }
 
-        if (bootStorageAdapter.getTenantId() != null && bootStorageAdapter.getUrl() != null) {
+        if (bootStorageAdapter.getUrl() != null) {
             return bootConfiguration;
         } else {
 
@@ -161,15 +176,15 @@ public class MonitorService implements Service<MonitorService> {
                         } else {
                             socketBinding = httpSocketBindingValue.getValue();
                         }
-                        address = socketBinding.getAddress().getHostAddress();
+                        address = socketBinding.getAddress().getHostName();
                         if (address.equals("0.0.0.0") || address.equals("::/128")) {
                             address = InetAddress.getLocalHost().getCanonicalHostName();
                         }
                         port = socketBinding.getAbsolutePort();
                     } else {
-                        OutboundSocketBinding serverBinding = serverOutboundSocketBindingValue
-                                .getValue();
-                        address = serverBinding.getResolvedDestinationAddress().getHostAddress();
+                        OutboundSocketBinding serverBinding = serverOutboundSocketBindingValue.getValue();
+                        address = WildflyCompatibilityUtils
+                                .outboundSocketBindingGetResolvedDestinationAddress(serverBinding).getHostName();
                         port = serverBinding.getDestinationPort();
                     }
                     String protocol = (bootStorageAdapter.isUseSSL()) ? "https" : "http";
@@ -181,87 +196,24 @@ public class MonitorService implements Service<MonitorService> {
 
             log.infoUsingServerSideUrl(useUrl);
 
-            String useTenantId = bootStorageAdapter.getTenantId();
-
-            if (bootStorageAdapter.getType() == StorageReportTo.HAWKULAR) {
-                long retryWait = 60_000; // we retry every minute
-                int retriesRemaining = 60; // we will retry once a minute for up to an hour (60 minutes)
-                while (retriesRemaining-- > 0) {
-                    try {
-                        StringBuilder url = Util.getContextUrlString(useUrl, bootStorageAdapter.getAccountsContext());
-                        url.append("personas/current");
-
-                        SSLContext sslContext = getSslContext(bootConfiguration, trustOnlySSLContextValues);
-
-                        HttpClientBuilder httpClientBuilder = new HttpClientBuilder(
-                                bootConfiguration.getStorageAdapter(),
-                                sslContext);
-
-                        OkHttpClient httpclient = httpClientBuilder.getHttpClient();
-
-                        Request request = httpClientBuilder.buildJsonGetRequest(url.toString(), null);
-                        Response httpResponse = httpclient.newCall(request).execute();
-
-                        if (!httpResponse.isSuccessful()) {
-                            throw new Exception("status-code=[" + httpResponse.code() + "], reason=["
-                                    + httpResponse.message() + "], url=[" + url + "]");
-                        }
-
-                        final String fromServer = httpResponse.body().string();
-                        // depending on accounts is probably overkill because of 1 REST call, so let's process the
-                        // JSON via regex
-                        Matcher matcher = Pattern.compile("\"id\":\"(.*?)\"").matcher(fromServer);
-                        if (matcher.find()) {
-                            String tenantIdFromAccounts = matcher.group(1);
-                            if (useTenantId != null && !tenantIdFromAccounts.equals(useTenantId)) {
-                                log.errorWrongTenantId(useTenantId, tenantIdFromAccounts);
-                                throw new Exception(
-                                        "Aborting agent startup because the desired tenant ID [" + useTenantId
-                                                + "] does not match the actual tenant ID [" + tenantIdFromAccounts
-                                                + "]");
-                            }
-                            useTenantId = tenantIdFromAccounts;
-                        }
-
-                        if (useTenantId == null) {
-                            throw new Exception("Got a null tenantId which is invalid");
-                        }
-
-                        log.debugf("Tenant ID [%s]", useTenantId);
-                        retriesRemaining = 0; // we got our tenant ID, no need to keep retrying
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException(ie);
-                    } catch (Throwable t) {
-                        log.errorRetryTenantId(t.toString());
-                        try {
-                            Thread.sleep(retryWait);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException(ie);
-                        }
-                    }
-                }
-            }
             MonitorServiceConfiguration.StorageAdapterConfiguration runtimeStorageAdapter = //
-            new MonitorServiceConfiguration.StorageAdapterConfiguration(
-                    bootStorageAdapter.getType(),
-                    bootStorageAdapter.getUsername(),
-                    bootStorageAdapter.getPassword(),
-                    bootStorageAdapter.getSecurityKey(),
-                    bootStorageAdapter.getSecuritySecret(),
-                    useTenantId,
-                    bootStorageAdapter.getFeedId(),
-                    useUrl,
-                    bootStorageAdapter.isUseSSL(),
-                    bootStorageAdapter.getServerOutboundSocketBindingRef(),
-                    bootStorageAdapter.getAccountsContext(),
-                    bootStorageAdapter.getInventoryContext(),
-                    bootStorageAdapter.getMetricsContext(),
-                    bootStorageAdapter.getFeedcommContext(),
-                    bootStorageAdapter.getKeystorePath(),
-                    bootStorageAdapter.getKeystorePassword(),
-                    bootStorageAdapter.getSecurityRealm());
+                    new MonitorServiceConfiguration.StorageAdapterConfiguration(
+                            bootStorageAdapter.getType(),
+                            bootStorageAdapter.getUsername(),
+                            bootStorageAdapter.getPassword(),
+                            bootStorageAdapter.getTenantId(),
+                            bootStorageAdapter.getFeedId(),
+                            useUrl,
+                            bootStorageAdapter.isUseSSL(),
+                            bootStorageAdapter.getServerOutboundSocketBindingRef(),
+                            bootStorageAdapter.getInventoryContext(),
+                            bootStorageAdapter.getMetricsContext(),
+                            bootStorageAdapter.getFeedcommContext(),
+                            bootStorageAdapter.getKeystorePath(),
+                            bootStorageAdapter.getKeystorePassword(),
+                            bootStorageAdapter.getSecurityRealm(),
+                            bootStorageAdapter.getConnectTimeoutSeconds(),
+                            bootStorageAdapter.getReadTimeoutSeconds());
 
             return bootConfiguration.cloneWith(runtimeStorageAdapter);
         }
@@ -288,8 +240,8 @@ public class MonitorService implements Service<MonitorService> {
     private final Map<String, InjectedValue<SSLContext>> trustOnlySSLContextValues = new HashMap<>();
 
     private boolean started = false;
-
     private PropertyChangeListener serverStateListener;
+    private final AtomicReference<Thread> startThread = new AtomicReference<Thread>();
 
     // Declared config found in standalone.xml. Only used to build the runtime configuration (see #configuration).
     private final MonitorServiceConfiguration bootConfiguration;
@@ -297,7 +249,7 @@ public class MonitorService implements Service<MonitorService> {
     // Indicates if we are running in a standalone server or in a host controller (or something similar)
     private final ProcessType processType;
 
-    // A version of bootConfiguration with defaults properly set. This is build in startMonitorService().
+    // A version of bootConfiguration with defaults properly set. This is built in startMonitorService().
     private MonitorServiceConfiguration configuration;
 
     // this is used to identify us to the Hawkular environment as a particular feed
@@ -312,6 +264,7 @@ public class MonitorService implements Service<MonitorService> {
     private HttpClientBuilder httpClientBuilder;
 
     // used to send/receive data to the server over the feed communications channel
+    private WebSocketClientBuilder webSocketClientBuilder;
     private FeedCommProcessor feedComm;
 
     // scheduled metric and avail collections
@@ -322,9 +275,10 @@ public class MonitorService implements Service<MonitorService> {
     private final AvailStorageProxy availStorageProxy = new AvailStorageProxy();
     private final InventoryStorageProxy inventoryStorageProxy = new InventoryStorageProxy();
 
+    // contains endpoint services for all the different protocols that are supported (dmr, jmx, platform)
     private ProtocolServices protocolServices;
-    private DynamicProtocolServices dynamicProtocolServices;
 
+    // used to talk to the management interface of the WildFly server the agent is deployed in
     private ModelControllerClientFactory localModelControllerClientFactory;
 
     public MonitorService(MonitorServiceConfiguration bootConfiguration, ProcessType processType) {
@@ -349,10 +303,11 @@ public class MonitorService implements Service<MonitorService> {
      * When this service is being built, this method is called to allow this service
      * to add whatever dependencies it needs.
      *
+     * @param target the service target
      * @param bldr the service builder used to add dependencies
      */
-    public void addDependencies(ServiceBuilder<MonitorService> bldr) {
-        if (this.processType.isManagedDomain()) {
+    public void addDependencies(ServiceTarget target, ServiceBuilder<MonitorService> bldr) {
+        if (processType.isManagedDomain()) {
             // we are in the host controller
             // NOTE: host controller does not yet have an equivalent for ServerEnvironment, we workaround this later
             bldr.addDependency(DomainModelControllerService.SERVICE_NAME, ModelController.class, modelControllerValue);
@@ -373,7 +328,7 @@ public class MonitorService implements Service<MonitorService> {
                 // The outbound binding isn't given, so we'll assume we are co-located with the server.
                 // In this case, we need our own http/https binding so we know what our local server is bound to.
                 // Note that this is an invalid configuration if we are in host controller, so error out in that case
-                if (this.processType.isManagedDomain()) {
+                if (processType.isManagedDomain()) {
                     throw new IllegalStateException("Do not know where the external Hawkular server is. Aborting.");
                 }
                 bldr.addDependency(SocketBinding.JBOSS_BINDING_NAME.append("http"), SocketBinding.class,
@@ -383,7 +338,7 @@ public class MonitorService implements Service<MonitorService> {
             } else {
                 // TODO: broken when deployed in host controller. see https://issues.jboss.org/browse/WFCORE-1505
                 // When that is fixed, remove this if-statement entirely.
-                if (this.processType.isManagedDomain()) {
+                if (processType.isManagedDomain()) {
                     throw new IllegalStateException("When deployed in host controller, you must use the URL attribute"
                             + " and not the outbound socket binding. "
                             + "See bug https://issues.jboss.org/browse/WFCORE-1505 for more.");
@@ -397,7 +352,7 @@ public class MonitorService implements Service<MonitorService> {
         // get the security realm ssl context for the storage adapter
         if (storageAdapterConfig.getSecurityRealm() != null) {
             InjectedValue<SSLContext> iv = new InjectedValue<>();
-            this.trustOnlySSLContextValues.put(storageAdapterConfig.getSecurityRealm(), iv);
+            trustOnlySSLContextValues.put(storageAdapterConfig.getSecurityRealm(), iv);
 
             // if we ever need our own private key, we can add another dependency with trustStoreOnly=false
             boolean trustStoreOnly = true;
@@ -408,25 +363,89 @@ public class MonitorService implements Service<MonitorService> {
                     trustStoreOnly);
         }
 
-        // get the security realms for any configured remote DMR and JMX and Prometheus servers that require ssl
-        for (EndpointConfiguration endpoint : this.bootConfiguration.getDmrConfiguration().getEndpoints().values()) {
+        // get the security realms for any configured remote servers that require ssl
+        for (EndpointConfiguration endpoint : bootConfiguration.getDmrConfiguration().getEndpoints().values()) {
             String securityRealm = endpoint.getSecurityRealm();
             if (securityRealm != null) {
                 addSslContext(securityRealm, bldr);
             }
         }
-        for (EndpointConfiguration endpoint : this.bootConfiguration.getJmxConfiguration().getEndpoints().values()) {
+        for (EndpointConfiguration endpoint : bootConfiguration.getJmxConfiguration().getEndpoints().values()) {
             String securityRealm = endpoint.getSecurityRealm();
             if (securityRealm != null) {
                 addSslContext(securityRealm, bldr);
             }
         }
-        for (DynamicEndpointConfiguration endpoint : this.bootConfiguration.getPrometheusConfiguration().getEndpoints()
-                .values()) {
-            String securityRealm = endpoint.getSecurityRealm();
-            if (securityRealm != null) {
-                addSslContext(securityRealm, bldr);
+
+        // bind the API to JNDI so other apps can use it, and prepare to build the binder service
+        // Note that if we are running in host controller or similiar, JNDI binding is not available.
+        String jndiName = bootConfiguration.getApiJndi();
+        boolean bindJndi = (jndiName == null || jndiName.isEmpty() || processType.isManagedDomain()) ? false : true;
+        if (bindJndi) {
+            class JndiBindListener extends AbstractServiceListener<Object> {
+                private final String jndiName;
+                private final String jndiObjectClassName;
+
+                public JndiBindListener(String jndiName, String jndiObjectClassName) {
+                    this.jndiName = jndiName;
+                    this.jndiObjectClassName = jndiObjectClassName;
+                }
+
+                public void transition(final ServiceController<? extends Object> controller,
+                        final ServiceController.Transition transition) {
+                    switch (transition) {
+                        case STARTING_to_UP: {
+                            log.infoBindJndiResource(jndiName, jndiObjectClassName);
+                            break;
+                        }
+                        case START_REQUESTED_to_DOWN: {
+                            log.infoUnbindJndiResource(jndiName);
+                            break;
+                        }
+                        case REMOVING_to_REMOVED: {
+                            log.infoUnbindJndiResource(jndiName);
+                            break;
+                        }
+                        default:
+                            break;
+                    }
+                }
             }
+            Object jndiObject = getHawkularMonitorContext();
+            ContextNames.BindInfo bindInfo = ContextNames.bindInfoFor(jndiName);
+            BinderService binderService = new BinderService(bindInfo.getBindName());
+            Injector<ManagedReferenceFactory> managedObjectInjector = WildflyCompatibilityUtils
+                    .getManagedObjectInjectorFromBinderService(binderService);
+            Injector<ServiceBasedNamingStore> namingStoreInjector = WildflyCompatibilityUtils
+                    .getNamingStoreInjectorFromBinderService(binderService);
+            ManagedReferenceFactory valueMRF = WildflyCompatibilityUtils
+                    .getImmediateManagedReferenceFactory(jndiObject);
+            String jndiObjectClassName = HawkularWildFlyAgentContext.class.getName();
+            ServiceName binderServiceName = bindInfo.getBinderServiceName();
+            ServiceBuilder<?> binderBuilder = target
+                    .addService(binderServiceName, binderService)
+                    .addInjection(managedObjectInjector, valueMRF)
+                    .setInitialMode(ServiceController.Mode.ACTIVE)
+                    .addDependency(bindInfo.getParentContextServiceName(),
+                            ServiceBasedNamingStore.class,
+                            namingStoreInjector)
+                    .addListener(new JndiBindListener(jndiName, jndiObjectClassName));
+            // our monitor service will depend on the binder service
+            bldr.addDependency(binderServiceName);
+
+            // install the binder service
+            binderBuilder.install();
+        }
+
+        return; // deps added
+    }
+
+    public void removeInstalledServices(OperationContext context) {
+        String jndiName = bootConfiguration.getApiJndi();
+        boolean bindJndi = (jndiName == null || jndiName.isEmpty() || processType.isManagedDomain()) ? false : true;
+        if (bindJndi) {
+            ContextNames.BindInfo bindInfo = ContextNames.bindInfoFor(jndiName);
+            context.removeService(bindInfo.getBinderServiceName());
         }
 
     }
@@ -456,32 +475,11 @@ public class MonitorService implements Service<MonitorService> {
 
     @Override
     public void start(final StartContext startContext) throws StartException {
-        final AtomicReference<Thread> startThread = new AtomicReference<Thread>();
-
-        // deferred startup: must wait for server to be running before we can monitor the subsystems
-        ControlledProcessStateService stateService = processStateValue.getValue();
-        serverStateListener = new PropertyChangeListener() {
+        class CustomPropertyChangeListener implements PropertyChangeListener {
             @Override
             public void propertyChange(PropertyChangeEvent evt) {
                 if (ControlledProcessState.State.RUNNING.equals(evt.getNewValue())) {
-                    // see HWKAGENT-74 for why we need to do this in a separate thread
-                    Thread newThread = new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                startMonitorService();
-                            } catch (Throwable t) {
-                            }
-                        }
-                    }, "Hawkular WildFly Agent Startup Thread");
-                    newThread.setDaemon(true);
-
-                    Thread oldThread = startThread.getAndSet(newThread);
-                    if (oldThread != null) {
-                        oldThread.interrupt();
-                    }
-
-                    newThread.start();
+                    startNow();
                 } else if (ControlledProcessState.State.STOPPING.equals(evt.getNewValue())) {
                     Thread oldThread = startThread.get();
                     if (oldThread != null) {
@@ -489,8 +487,41 @@ public class MonitorService implements Service<MonitorService> {
                     }
                 }
             }
-        };
+
+            private void startNow() {
+                // see HWKAGENT-74 for why we need to do this in a separate thread
+                Thread newThread = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            startMonitorService();
+                        } catch (Throwable t) {
+                        }
+                    }
+                }, "Hawkular WildFly Agent Startup Thread");
+                newThread.setDaemon(true);
+
+                Thread oldThread = startThread.getAndSet(newThread);
+                if (oldThread != null) {
+                    oldThread.interrupt();
+                }
+
+                newThread.start();
+            }
+        }
+
+        // deferred startup: must wait for server to be running before we can monitor the subsystems
+        ControlledProcessStateService stateService = processStateValue.getValue();
+        CustomPropertyChangeListener listener = new CustomPropertyChangeListener();
+        serverStateListener = listener;
         stateService.addPropertyChangeListener(serverStateListener);
+
+        // if the server is already started, we need to restart now. Otherwise, we'll start when the
+        // server tells us it is running in our change listener above.
+        if (stateService.getCurrentState() == State.RUNNING) {
+            listener.startNow();
+        }
+
     }
 
     @Override
@@ -507,13 +538,39 @@ public class MonitorService implements Service<MonitorService> {
         }
 
         try {
+            Thread currentStartThread;
+            synchronized (startThread) {
+                currentStartThread = startThread.get();
+                if (currentStartThread != null && currentStartThread != Thread.currentThread()) {
+                    startThread.set(Thread.currentThread());
+                } else {
+                    currentStartThread = null;
+                }
+            }
+            if (currentStartThread != null) {
+                log.infoInterruptStartAndStartAgain();
+                while (currentStartThread.isAlive()) {
+                    currentStartThread.interrupt();
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }
+
             log.infoStarting();
 
-            this.configuration = buildRuntimeConfiguration(this.bootConfiguration,
+            this.configuration = buildRuntimeConfiguration(
+                    this.bootConfiguration,
                     this.httpSocketBindingValue,
                     this.httpsSocketBindingValue,
-                    this.serverOutboundSocketBindingValue,
-                    this.trustOnlySSLContextValues);
+                    this.serverOutboundSocketBindingValue);
+
+            if (this.configuration.getStorageAdapter().getTenantId() == null) {
+                log.errorNoTenantIdSpecified();
+                throw new Exception("Missing tenant ID");
+            }
 
             // prepare the builder that will create our HTTP/REST clients to the hawkular server infrastructure
             SSLContext ssl = getSslContext(this.configuration, this.trustOnlySSLContextValues);
@@ -526,7 +583,7 @@ public class MonitorService implements Service<MonitorService> {
             if (this.configuration.getStorageAdapter().getFeedId() != null) {
                 this.feedId = this.configuration.getStorageAdapter().getFeedId();
             } else {
-                try (ModelControllerClient c = localModelControllerClientFactory.createClient()) {
+                try (ModelControllerClient c = this.localModelControllerClientFactory.createClient()) {
                     this.feedId = DMREndpointService.lookupServerIdentifier(c);
                 } catch (Exception e) {
                     throw new Exception("Could not obtain local feed ID", e);
@@ -537,38 +594,46 @@ public class MonitorService implements Service<MonitorService> {
             final MetricRegistry metricRegistry = new MetricRegistry();
             this.diagnostics = new DiagnosticsImpl(configuration.getDiagnostics(), metricRegistry, feedId);
 
-            // if we are participating in a full Hawkular environment, we need to do some additional things:
-            // 1. determine our tenant ID dynamically
-            // 2. register our feed ID
-            // 3. connect to the server's feed comm channel
-            // 4. prepare the thread pool that will store discovered resources into inventory
-            if (this.configuration.getStorageAdapter().getType() == StorageReportTo.HAWKULAR) {
-                if (this.configuration.getStorageAdapter().getTenantId() == null) {
-                    log.errorNoTenantIdFromAccounts();
-                    throw new Exception("Failed to get tenant ID");
-                }
-                try {
-                    registerFeed();
-                } catch (Exception e) {
-                    log.errorCannotDoAnythingWithoutFeed(e);
-                    throw new Exception("Agent needs a feed to run");
-                }
+            // We need the tenantIds to register our feed (in Hawkular mode) and to schedule pings
+            Set<String> tenantIds = getTenantIds();
 
-                // try to connect to the server via command-gateway channel; keep going on error
-                try {
-                    connectToCommandGatewayCommChannel();
-                } catch (Exception e) {
-                    if (e instanceof InterruptedException) {
-                        Thread.currentThread().interrupt();
+            // Before we go on, we must make sure the Hawkular Server is up and ready
+            waitForHawkularServer();
+
+            // perform some things that are dependent upon what mode the agent is in
+            switch (this.configuration.getStorageAdapter().getType()) {
+                case HAWKULAR:
+                    // if we are participating in a full Hawkular environment, we need to do some additional things:
+                    // 1. register our feed ID
+                    // 2. connect to the server's feed comm channel
+                    try {
+                        registerFeed(tenantIds);
+                    } catch (Exception e) {
+                        log.errorCannotDoAnythingWithoutFeed(e);
+                        throw new Exception("Agent needs a feed to run");
                     }
-                    log.errorCannotEstablishFeedComm(e);
-                }
 
-            } else {
-                if (this.configuration.getStorageAdapter().getTenantId() == null) {
-                    log.errorMustHaveTenantIdConfigured();
-                    throw new Exception("Agent needs a tenant ID to run");
-                }
+                    // try to connect to the server via command-gateway channel; keep going on error
+                    try {
+                        this.webSocketClientBuilder = new WebSocketClientBuilder(
+                                this.configuration.getStorageAdapter(), ssl);
+                        this.feedComm = new FeedCommProcessor(this.webSocketClientBuilder, this.configuration,
+                                this.feedId, this);
+                        this.feedComm.connect();
+                    } catch (Exception e) {
+                        if (e instanceof InterruptedException) {
+                            Thread.currentThread().interrupt();
+                        }
+                        log.errorCannotEstablishFeedComm(e);
+                    }
+                    break;
+
+                case METRICS:
+                    // nothing special needs to be done
+                    break;
+                default:
+                    throw new IllegalStateException(
+                            "Unknown storage adapter type: " + this.configuration.getStorageAdapter().getType());
             }
 
             // start the storage adapter
@@ -580,29 +645,25 @@ public class MonitorService implements Service<MonitorService> {
             }
 
             try {
-                startScheduler();
+                startScheduler(tenantIds);
             } catch (Exception e) {
                 log.errorCannotInitializeScheduler(e);
                 throw new Exception("Agent cannot initialize scheduler");
             }
 
-            ProtocolServices ps = ProtocolServices.builder(feedId, diagnostics, trustOnlySSLContextValues)
-                    .dmrProtocolService(localModelControllerClientFactory, configuration.getDmrConfiguration())
+            // build the protocol services
+            ProtocolServices ps = createProtocolServicesBuilder()
+                    .dmrProtocolService(this.localModelControllerClientFactory, configuration.getDmrConfiguration())
                     .jmxProtocolService(configuration.getJmxConfiguration())
                     .platformProtocolService(configuration.getPlatformConfiguration())
-                    .autoDiscoveryScanPeriodSecs(configuration.getAutoDiscoveryScanPeriodSecs())
+                    .autoDiscoveryScanPeriodSecs(configuration.getAutoDiscoveryScanPeriodSeconds())
                     .build();
             ps.addInventoryListener(inventoryStorageProxy);
             ps.addInventoryListener(schedulerService);
             protocolServices = ps;
-            protocolServices.start();
 
-            DynamicProtocolServices dps = DynamicProtocolServices.builder(feedId, trustOnlySSLContextValues)
-                    .prometheusDynamicProtocolService(configuration.getPrometheusConfiguration(),
-                            getHawkularMonitorContext())
-                    .build();
-            dynamicProtocolServices = dps;
-            dynamicProtocolServices.start();
+            // start all protocol services - this should perform the initial discovery scans
+            protocolServices.start();
 
             started = true;
 
@@ -613,10 +674,30 @@ public class MonitorService implements Service<MonitorService> {
 
             log.errorFailedToStartAgent(t);
 
-            // artifically shutdown the agent - agent will be disabled now
+            // artificially shutdown the agent - agent will be disabled now
             started = true;
             stopMonitorService();
         }
+    }
+
+    /**
+     * @return tenant IDs of the agent and its monitored endpoints (even if those monitored endpoints are not enabled)
+     */
+    private Set<String> getTenantIds() {
+        Set<String> tenantIds = new HashSet<String>();
+        List<AbstractEndpointConfiguration> endpoints = new ArrayList<>();
+        endpoints.addAll(configuration.getDmrConfiguration().getEndpoints().values());
+        endpoints.addAll(configuration.getJmxConfiguration().getEndpoints().values());
+        endpoints.addAll(configuration.getPlatformConfiguration().getEndpoints().values());
+
+        tenantIds.add(configuration.getStorageAdapter().getTenantId()); // always register agent's global tenant ID
+        for (AbstractEndpointConfiguration endpoint : endpoints) {
+            String tenantId = endpoint.getTenantId();
+            if (tenantId != null) {
+                tenantIds.add(tenantId);
+            }
+        }
+        return tenantIds;
     }
 
     /**
@@ -646,17 +727,6 @@ public class MonitorService implements Service<MonitorService> {
             } catch (Throwable t) {
                 error.compareAndSet(null, t);
                 log.debug("Cannot shutdown feed comm but will continue shutdown", t);
-            }
-
-            // stop our dynamic protocol services
-            try {
-                if (dynamicProtocolServices != null) {
-                    dynamicProtocolServices.stop();
-                    dynamicProtocolServices = null;
-                }
-            } catch (Throwable t) {
-                error.compareAndSet(null, t);
-                log.debug("Cannot shutdown dynamic protocol services but will continue shutdown", t);
             }
 
             // stop our normal protocol services
@@ -736,7 +806,10 @@ public class MonitorService implements Service<MonitorService> {
                     List<MeasurementInstance<?, AvailType<?>>> avails = availsToChange.get(endpointService);
                     for (MeasurementInstance avail : avails) {
                         AvailDataPoint availDataPoint = new AvailDataPoint(
-                                endpointService.generateMeasurementKey(avail), now, setAvailOnShutdown);
+                                avail.getAssociatedMetricId(),
+                                now,
+                                setAvailOnShutdown,
+                                config.getTenantId());
                         datapoints.add(availDataPoint);
                     }
                 }
@@ -747,7 +820,7 @@ public class MonitorService implements Service<MonitorService> {
 
     private Map<EndpointService<?, ?>, List<MeasurementInstance<?, AvailType<?>>>> getAvailsToChange() {
         Map<EndpointService<?, ?>, List<MeasurementInstance<?, AvailType<?>>>> avails = new HashMap<>();
-        for (ProtocolService<?, ?> protocolService : protocolServices.getServices()){
+        for (ProtocolService<?, ?> protocolService : protocolServices.getServices()) {
             for (EndpointService<?, ?> endpointService : protocolService.getEndpointServices().values()) {
                 EndpointConfiguration config = (EndpointConfiguration) endpointService.getMonitoredEndpoint()
                         .getEndpointConfiguration();
@@ -836,13 +909,12 @@ public class MonitorService implements Service<MonitorService> {
     }
 
     /**
-     * Builds the scheduler's configuraton and starts the scheduler.
-     * Do NOT call this until you know all resources have been discovered
-     * and the inventories have been built.
+     * Builds the scheduler's configuration and starts the scheduler.
      *
+     * @param tenantIds the tenants our feed is using
      * @throws Exception on error
      */
-    private void startScheduler() throws Exception {
+    private void startScheduler(Set<String> tenantIds) throws Exception {
         if (this.schedulerService == null) {
             SchedulerConfiguration schedulerConfig = new SchedulerConfiguration();
             schedulerConfig.setDiagnosticsConfig(this.configuration.getDiagnostics());
@@ -851,6 +923,9 @@ public class MonitorService implements Service<MonitorService> {
             schedulerConfig.setMetricDispatcherMaxBatchSize(this.configuration.getMetricDispatcherMaxBatchSize());
             schedulerConfig.setAvailDispatcherBufferSize(this.configuration.getAvailDispatcherBufferSize());
             schedulerConfig.setAvailDispatcherMaxBatchSize(this.configuration.getAvailDispatcherMaxBatchSize());
+            schedulerConfig.setPingDispatcherPeriodSeconds(this.configuration.getPingDispatcherPeriodSeconds());
+            schedulerConfig.setFeedId(this.feedId);
+            schedulerConfig.setTenantIds(tenantIds);
 
             this.schedulerService = new SchedulerService(schedulerConfig, this.diagnostics, this.storageAdapter);
         }
@@ -859,88 +934,252 @@ public class MonitorService implements Service<MonitorService> {
     }
 
     /**
-     * Registers our feed with the Hawkular system.
+     * Registers the feed with the Hawkular system under the given tenants.
+     * Note, it is OK to re-register the same feed/tenant combinations.
      *
+     * This will not return until the feed is properly registered under all tenants.
+     * If the Hawkular server is not up, this could mean we are stuck here for a long time.
+     *
+     * @param tenantIds the feed is registered under the given tenantIds
      * @throws Exception if failed to register feed
      */
-    private void registerFeed() throws Exception {
-        String desiredFeedId = this.feedId;
+    private void registerFeed(Set<String> tenantIds) throws Exception {
+        int retryMillis;
+        try {
+            retryMillis = Integer.parseInt(System.getProperty("hawkular.agent.feed.registration.retry", "60000"));
+        } catch (Exception e) {
+            retryMillis = 60000;
+        }
 
         try {
-            File feedFile = new File(getDataDirectory(), "feedId.txt");
-            try {
-                String feedIdFromDataFile = Util.read(feedFile);
-                feedIdFromDataFile = feedIdFromDataFile.trim();
-                if (!desiredFeedId.equals(feedIdFromDataFile)) {
-                    log.warnf("Will use feed ID [%s] found in [%s];"
-                            + " note that it is different than our desired feed ID [%s].",
-                            feedIdFromDataFile, feedFile, desiredFeedId);
-                    feedId = feedIdFromDataFile;
-                }
-                return; // we already have a feed ID - we can return now since there is nothing else to do
-            } catch (FileNotFoundException e) {
-                // probably just haven't been registered yet, keep going
+            for (String tenantId : tenantIds) {
+                registerFeed(tenantId, retryMillis);
             }
-
-            // get the payload in JSON format
-            Feed.Blueprint feedPojo = new Feed.Blueprint(desiredFeedId, null);
-            String jsonPayload = Util.toJson(feedPojo);
-
-            // build the REST URL...
-            // start with the protocol, host, and port, plus context
-            StringBuilder url = Util.getContextUrlString(configuration.getStorageAdapter().getUrl(),
-                    configuration.getStorageAdapter().getInventoryContext());
-
-            // rest of the URL says we want the feeds API
-            url.append("feeds");
-
-            // now send the REST request
-            OkHttpClient httpclient = this.httpClientBuilder.getHttpClient();
-            Request request = this.httpClientBuilder.buildJsonPostRequest(url.toString(), null, jsonPayload);
-            Response httpResponse = httpclient.newCall(request).execute();
-
-            // HTTP status of 201 means success; 409 means it already exists, anything else is an error
-            if (httpResponse.code() == 201) {
-
-                // success - store our feed ID so we remember it the next time
-                final String feedObjectFromServer = httpResponse.body().string();
-                final Feed feed = Util.fromJson(feedObjectFromServer, Feed.class);
-                if (desiredFeedId.equals(feed.getId())) {
-                    log.infoUsingFeedId(feed.getId());
-                } else {
-                    log.errorUnwantedFeedId(feed.getId(), desiredFeedId);
-                    // should we throw an error here or just use the feed ID we were given?
-                    log.debugf("Using feed ID [%s]; make sure the agent doesn't lose its data file", feed.getId());
-                }
-
-                this.feedId = feed.getId();
-
-            } else if (httpResponse.code() == 409) {
-                log.infoFeedIdAlreadyRegistered(this.feedId);
-            } else {
-                throw new Exception("status-code=[" + httpResponse.code() + "], reason=["
-                        + httpResponse.message() + "], url=[" + request.urlString() + "]");
-            }
-
-            // persist our feed ID so we can remember it the next time we start up
-            Util.write(feedId, feedFile);
-
         } catch (Throwable t) {
-            throw new Exception(String.format("Cannot create feed [%s]", desiredFeedId), t);
+            throw new Exception(String.format("Cannot register feed ID [%s]", this.feedId), t);
+        }
+    }
+
+    private void waitForHawkularServer() throws Exception {
+        OkHttpClient httpclient = this.httpClientBuilder.getHttpClient();
+
+        String statusUrl = Util.getContextUrlString(configuration.getStorageAdapter().getUrl(),
+                configuration.getStorageAdapter().getMetricsContext()).append("status").toString();
+        Request request = this.httpClientBuilder.buildJsonGetRequest(statusUrl, null);
+        int counter = 0;
+        while (true) {
+            Response response = null;
+            try {
+                response = httpclient.newCall(request).execute();
+                if (response.code() != 200) {
+                    if (response.code() != 401) {
+                        log.debugf("Hawkular Metrics is not ready yet: %d/%s", response.code(), response.message());
+                    } else {
+                        log.warnBadHawkularCredentials(response.code(), response.message());
+                    }
+                } else {
+                    String bodyString = response.body().string();
+                    if (checkReallyUp(bodyString)) {
+                        log.debugf("Hawkular Metrics is ready: %s", bodyString);
+                        break;
+                    } else {
+                        log.debugf("Hawkular Metrics is still starting: %s", bodyString);
+                    }
+                }
+            } catch (Exception e) {
+                log.debugf("Hawkular Metrics is not ready yet: %s", e.toString());
+            } finally {
+                if (response != null) {
+                    response.body().close();
+                }
+            }
+            Thread.sleep(5000L);
+            counter++;
+            if (counter % 12 == 0) {
+                log.warnConnectionDelayed(counter, "metrics", statusUrl);
+            }
+        }
+
+        if (this.configuration.getStorageAdapter().getType() == StorageReportTo.HAWKULAR) {
+            statusUrl = Util.getContextUrlString(configuration.getStorageAdapter().getUrl(),
+                    configuration.getStorageAdapter().getInventoryContext()).append("status").toString();
+            request = this.httpClientBuilder.buildJsonGetRequest(statusUrl, null);
+            counter = 0;
+            while (true) {
+                Response response = null;
+                try {
+                    response = httpclient.newCall(request).execute();
+                    if (response.code() != 200) {
+                        if (response.code() != 401) {
+                            log.debugf("Hawkular Inventory is not ready yet: %d/%s", response.code(),
+                                    response.message());
+                        } else {
+                            log.warnBadHawkularCredentials(response.code(), response.message());
+                        }
+                    } else {
+                        log.debugf("Hawkular Inventory is ready: %s", response.body().string());
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.debugf("Hawkular Inventory is not ready yet: %s", e.toString());
+                } finally {
+                    if (response != null) {
+                        response.body().close();
+                    }
+                }
+                Thread.sleep(5000L);
+                counter++;
+                if (counter % 5 == 0) {
+                    log.warnConnectionDelayed(counter, "inventory", statusUrl);
+                }
+            }
         }
     }
 
     /**
-     * Connects to the Hawkular server over the websocket command gateway.
-     *
-     * @throws Exception if failed to connect to the Hawkular server
+     * If the server returns a 200 OK, we still need to check the content if the server
+     * is really up. This is explained here: https://twitter.com/heiglandreas/status/801137903149654017
+     * @param bodyString String representation of the body
+     * @return true if it is really up, false otherwise (still starting).
      */
-    private void connectToCommandGatewayCommChannel() throws Exception {
-        feedComm = new FeedCommProcessor(this.httpClientBuilder, this.configuration, this.feedId, this);
-        feedComm.connect();
+    private boolean checkReallyUp(String bodyString) {
+
+        ObjectMapper mapper = new ObjectMapper(); // We don't need it later
+        Map result = null;
+        try {
+            result = mapper.readValue(bodyString, Map.class);
+        } catch (IOException e) {
+            return false;
+        }
+        String status = (String) result.get("MetricsService");
+
+        return "STARTED".equals(status);
     }
 
+    /**
+     * Registers the feed with the Hawkular system under the given tenant.
+     * Note, it is OK to re-register the same feed/tenant combinations.
+     *
+     * If retryMillis > 0 then this will not return until the feed is properly registered.
+     * If the Hawkular server is not up, this could mean we are stuck here for a long time.
+     *
+     * @param tenantId the feed is registered under the given tenantId
+     * @param retryMillis if >0 the amount of millis to elapse before retrying
+     * @throws Exception if failed to register feed
+     */
+    public void registerFeed(String tenantId, int retryMillis) throws Exception {
+        // get the payload in JSON format
+        Feed.Blueprint feedPojo = new Feed.Blueprint(this.feedId, null);
+        String jsonPayload = Util.toJson(feedPojo);
+
+        // build the REST URL...
+        // start with the protocol, host, and port, plus context
+        StringBuilder url = Util.getContextUrlString(configuration.getStorageAdapter().getUrl(),
+                configuration.getStorageAdapter().getInventoryContext());
+
+        // rest of the URL says we want the feeds API
+        url.append("entity/feed");
+
+        // now send the REST requests - one for each tenant to register
+        OkHttpClient httpclient = this.httpClientBuilder.getHttpClient();
+
+        Map<String, String> header = Collections.singletonMap("Hawkular-Tenant", tenantId);
+        Request request = this.httpClientBuilder.buildJsonPostRequest(url.toString(), header, jsonPayload);
+
+        boolean keepRetrying = (retryMillis > 0);
+        do {
+            try {
+                // note that we retry if newCall.execute throws an exception (assuming we were told to retry)
+                Response httpResponse = httpclient.newCall(request).execute();
+
+                try {
+                    // HTTP status of 201 means success; 409 means it already exists, anything else is an error
+                    if (httpResponse.code() == 201) {
+                        keepRetrying = false;
+                        final String feedObjectFromServer = httpResponse.body().string();
+                        final Feed feed = Util.fromJson(feedObjectFromServer, Feed.class);
+                        if (this.feedId.equals(feed.getId())) {
+                            log.infoUsingFeedId(feed.getId(), tenantId);
+                        } else {
+                            // do not keep retrying - this is a bad error; we need to abort
+                            log.errorUnwantedFeedId(feed.getId(), this.feedId, tenantId);
+                            throw new Exception(String.format("Received unwanted feed [%s]", feed.getId()));
+                        }
+                    } else if (httpResponse.code() == 409) {
+                        keepRetrying = false;
+                        log.infoFeedIdAlreadyRegistered(this.feedId, tenantId);
+                    } else if (httpResponse.code() == 404) {
+                        // the server is probably just starting to come up - wait for it if we were told to retry
+                        keepRetrying = (retryMillis > 0);
+                        throw new Exception(String.format("Is the Hawkular Server booting up? (%d=%s)",
+                                httpResponse.code(),
+                                httpResponse.message()));
+                    } else {
+                        // futile to keep retrying and getting the same 500 or whatever error
+                        keepRetrying = false;
+                        throw new Exception(String.format("status-code=[%d], reason=[%s]",
+                                httpResponse.code(),
+                                httpResponse.message()));
+                    }
+                } finally {
+                    httpResponse.body().close();
+                }
+            } catch (Exception e) {
+                log.warnCannotRegisterFeed(this.feedId, tenantId, request.url().toString(), e.toString());
+                if (keepRetrying) {
+                    Thread.sleep(retryMillis);
+                } else {
+                    throw e;
+                }
+            }
+        } while (keepRetrying);
+    }
+
+    /**
+     * @return feed ID of the agent if the agent has started and the feed was registered; null otherwise
+     */
+    public String getFeedId() {
+        return this.feedId;
+    }
+
+    /**
+     * @return tenant ID of the agent
+     */
+    public String getTenantId() {
+        return this.configuration.getStorageAdapter().getTenantId();
+    }
+
+    public SchedulerService getSchedulerService() {
+        return schedulerService;
+    }
+
+    /**
+     * @return a factory that can create clients which can talk to the local management interface
+     *         of the app server we are running in
+     */
+    public ModelControllerClientFactory getLocalModelControllerClientFactory() {
+        return localModelControllerClientFactory;
+    }
+
+    /**
+     * @return builder that let's you create protocol services and their endpoints
+     */
+    public ProtocolServices.Builder createProtocolServicesBuilder() {
+        return ProtocolServices.builder(feedId, diagnostics, trustOnlySSLContextValues);
+    }
+
+    /**
+     * @return the current set of protocol services
+     */
     public ProtocolServices getProtocolServices() {
         return protocolServices;
+    }
+
+    /**
+     * @return true if the agent is to be considered immutable and no config changes are allowed. This should
+     *         also disallow operation execution on managed resources if those operations modify the remote resource.
+     */
+    public boolean isImmutable() {
+        return this.configuration.isImmutable();
     }
 }

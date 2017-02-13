@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,7 +21,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -29,9 +31,12 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 
 import org.hawkular.agent.monitor.api.Avail;
+import org.hawkular.agent.monitor.api.DiscoveryEvent;
 import org.hawkular.agent.monitor.api.InventoryEvent;
 import org.hawkular.agent.monitor.api.InventoryListener;
 import org.hawkular.agent.monitor.api.SamplingService;
@@ -39,7 +44,9 @@ import org.hawkular.agent.monitor.diagnostics.ProtocolDiagnostics;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.EndpointConfiguration;
 import org.hawkular.agent.monitor.inventory.AttributeLocation;
 import org.hawkular.agent.monitor.inventory.AvailType;
+import org.hawkular.agent.monitor.inventory.ID;
 import org.hawkular.agent.monitor.inventory.MeasurementInstance;
+import org.hawkular.agent.monitor.inventory.MeasurementType;
 import org.hawkular.agent.monitor.inventory.MetricType;
 import org.hawkular.agent.monitor.inventory.MonitoredEndpoint;
 import org.hawkular.agent.monitor.inventory.NodeLocation;
@@ -53,8 +60,11 @@ import org.hawkular.agent.monitor.log.MsgLogger;
 import org.hawkular.agent.monitor.service.ServiceStatus;
 import org.hawkular.agent.monitor.storage.AvailDataPoint;
 import org.hawkular.agent.monitor.storage.MetricDataPoint;
+import org.hawkular.agent.monitor.storage.NumericMetricDataPoint;
+import org.hawkular.agent.monitor.storage.StringMetricDataPoint;
 import org.hawkular.agent.monitor.util.Consumer;
 import org.hawkular.agent.monitor.util.ThreadFactoryGenerator;
+import org.jboss.as.controller.client.helpers.MeasurementUnit;
 
 import com.codahale.metrics.Timer.Context;
 
@@ -72,24 +82,99 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
 
     private class InventoryListenerSupport {
         private final List<InventoryListener> inventoryListeners = new ArrayList<>();
+        private final ReadWriteLock inventoryListenerRWLock = new ReentrantReadWriteLock();
 
         public void fireResourcesAdded(List<Resource<L>> resources) {
             if (!resources.isEmpty()) {
-                LOG.debugf("Firing inventory event for [%s] added/modified resources", resources.size());
-                InventoryEvent<L> event = new InventoryEvent<L>(EndpointService.this, resources);
-                for (InventoryListener inventoryListener : inventoryListeners) {
-                    inventoryListener.resourcesAdded(event);
+                inventoryListenerRWLock.readLock().lock();
+                try {
+                    LOG.debugf("Firing inventory event for [%d] added/modified resources", resources.size());
+                    InventoryEvent<L> event = new InventoryEvent<L>(EndpointService.this, resources);
+                    for (InventoryListener inventoryListener : inventoryListeners) {
+                        inventoryListener.resourcesAdded(event);
+                    }
+                } finally {
+                    inventoryListenerRWLock.readLock().unlock();
                 }
             }
         }
 
         public void fireResourcesRemoved(List<Resource<L>> resources) {
             if (!resources.isEmpty()) {
-                LOG.debugf("Firing inventory event for [%s] removed resources", resources.size());
-                InventoryEvent<L> event = new InventoryEvent<L>(EndpointService.this, resources);
-                for (InventoryListener inventoryListener : inventoryListeners) {
-                    inventoryListener.resourcesRemoved(event);
+                inventoryListenerRWLock.readLock().lock();
+                try {
+                    LOG.debugf("Firing inventory event for [%d] removed resources", resources.size());
+                    InventoryEvent<L> event = new InventoryEvent<L>(EndpointService.this, resources);
+                    for (InventoryListener inventoryListener : inventoryListeners) {
+                        inventoryListener.resourcesRemoved(event);
+                    }
+                } finally {
+                    inventoryListenerRWLock.readLock().unlock();
                 }
+            }
+        }
+
+        public void fireDiscoveryComplete() {
+            inventoryListenerRWLock.readLock().lock();
+            try {
+                LOG.debugf("Firing inventory event for discovery complete");
+                DiscoveryEvent<L> event = new DiscoveryEvent<L>(EndpointService.this, getResourceManager(),
+                        getResourceTypeManager());
+                for (InventoryListener inventoryListener : inventoryListeners) {
+                    inventoryListener.discoveryCompleted(event);
+                }
+            } finally {
+                inventoryListenerRWLock.readLock().unlock();
+            }
+        }
+    }
+
+    private class DiscoveryResults {
+        private final List<Resource<L>> newOrModifiedResources = new ArrayList<>();
+        private final List<ID> discoveredResourceIds = new ArrayList<>(); // to save space, just store the IDs
+        private final List<Throwable> errors = new ArrayList<>();
+
+        public DiscoveryResults() {
+        }
+
+        public void error(Throwable t) {
+            errors.add(t);
+        }
+
+        public void added(Resource<L> resource) {
+            discoveredResourceIds.add(resource.getID());
+            newOrModifiedResources.add(resource);
+        }
+
+        public void modified(Resource<L> resource) {
+            discoveredResourceIds.add(resource.getID());
+            newOrModifiedResources.add(resource);
+        }
+
+        public void unchanged(Resource<L> resource) {
+            discoveredResourceIds.add(resource.getID());
+        }
+
+        public void discoveryFinished() {
+            // Discovery is complete so the resource manager has all known resources (including all previously
+            // discovered resources that may not have been discovered this last time around). removedResources will be
+            // those resources that were not added, modified, or discovered-but-unchanged but still found in the
+            // resource manager - we need to remove them internally and fire the removed event.
+            List<Resource<L>> removedResources = getResourceManager().getAllResources(discoveredResourceIds);
+
+            // remove them from the resource manager itself
+            removedResources.forEach(r -> getResourceManager().removeResource(r));
+
+            // now emit events so other parts of the system can add/remove resources and persist to Hawkular Inventory
+            inventoryListenerSupport.fireResourcesAdded(newOrModifiedResources);
+            inventoryListenerSupport.fireResourcesRemoved(removedResources);
+
+            // do not fire a discovery complete event if errors occurred since we might be missing resources
+            // that really do exist - we don't want to permanently delete those during an inventory sync
+            if (errors.isEmpty()) {
+                inventoryListenerSupport.fireDiscoveryComplete();
+            } else {
+                LOG.debugf("[%d] discovery errors occurred - not firing event: %s", errors.size(), errors);
             }
         }
     }
@@ -105,8 +190,10 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
 
     protected volatile ServiceStatus status = ServiceStatus.INITIAL;
 
-    public EndpointService(String feedId, MonitoredEndpoint<EndpointConfiguration> endpoint,
-            ResourceTypeManager<L> resourceTypeManager, LocationResolver<L> locationResolver,
+    public EndpointService(String feedId,
+            MonitoredEndpoint<EndpointConfiguration> endpoint,
+            ResourceTypeManager<L> resourceTypeManager,
+            LocationResolver<L> locationResolver,
             ProtocolDiagnostics diagnostics) {
         super();
         this.feedId = feedId;
@@ -121,7 +208,7 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
         // discovery request queued up. Any other full discovery scan requests will be rejected because they are
         // not needed - the queued discovery scan will do it. This minimizes redundant scans being performed.
         ThreadFactory threadFactory = ThreadFactoryGenerator.generateFactory(true,
-                "Hawkular WildFly Agent Full Discovery Scan");
+                "Hawkular WildFly Agent Full Discovery Scan-" + endpoint.getName());
         this.fullDiscoveryScanThreadPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>(1), threadFactory);
     }
@@ -157,9 +244,14 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
      * @param listener to add
      */
     public void addInventoryListener(InventoryListener listener) {
-        status.assertInitialOrStopped(getClass(), "addInventoryListener()");
-        this.inventoryListenerSupport.inventoryListeners.add(listener);
-        LOG.debugf("Added inventory listener [%s] for endpoint [%s]", listener, getMonitoredEndpoint());
+        this.inventoryListenerSupport.inventoryListenerRWLock.writeLock().lock();
+        try {
+            status.assertInitialOrStopped(getClass(), "addInventoryListener()");
+            this.inventoryListenerSupport.inventoryListeners.add(listener);
+            LOG.debugf("Added inventory listener [%s] for endpoint [%s]", listener, getMonitoredEndpoint());
+        } finally {
+            this.inventoryListenerSupport.inventoryListenerRWLock.writeLock().unlock();
+        }
     }
 
     /**
@@ -168,9 +260,14 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
      * @param listener to remove
      */
     public void removeInventoryListener(InventoryListener listener) {
-        status.assertInitialOrStopped(getClass(), "removeInventoryListener()");
-        this.inventoryListenerSupport.inventoryListeners.remove(listener);
-        LOG.debugf("Removed inventory listener [%s] for endpoint [%s]", listener, getMonitoredEndpoint());
+        this.inventoryListenerSupport.inventoryListenerRWLock.writeLock().lock();
+        try {
+            status.assertInitialOrStopped(getClass(), "removeInventoryListener()");
+            this.inventoryListenerSupport.inventoryListeners.remove(listener);
+            LOG.debugf("Removed inventory listener [%s] for endpoint [%s]", listener, getMonitoredEndpoint());
+        } finally {
+            this.inventoryListenerSupport.inventoryListenerRWLock.writeLock().unlock();
+        }
     }
 
     /**
@@ -195,20 +292,26 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
         Runnable runnable = new Runnable() {
             @Override
             public void run() {
+                DiscoveryResults discoveryResults = new DiscoveryResults();
+
                 LOG.infoDiscoveryRequested(getMonitoredEndpoint());
                 long duration = -1;
                 try (S session = openSession()) {
-                    Set<ResourceType<L>> rootTypes = resourceTypeManager.getRootResourceTypes();
+                    Set<ResourceType<L>> rootTypes = getResourceTypeManager().getRootResourceTypes();
                     Context timer = getDiagnostics().getFullDiscoveryScanTimer().time();
                     for (ResourceType<L> rootType : rootTypes) {
-                        discoverChildren(null, rootType, session);
+                        discoverChildren(null, rootType, session, discoveryResults);
                     }
                     long nanos = timer.stop();
                     duration = TimeUnit.MILLISECONDS.convert(nanos, TimeUnit.NANOSECONDS);
                 } catch (Exception e) {
                     LOG.errorCouldNotAccess(EndpointService.this, e);
+                    discoveryResults.error(e);
                 }
-                resourceManager.logTreeGraph("Discovered all resources for [" + endpoint + "]", duration);
+
+                getResourceManager().logTreeGraph("Discovered all resources for: " + getMonitoredEndpoint(), duration);
+
+                discoveryResults.discoveryFinished();
             }
         };
 
@@ -228,8 +331,11 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
      * @param session If not <code>null</code>, this session is used; if <code>null</code> one will be created.
      *        If a non-null session is passed in, the caller is responsible for closing it - this method will
      *        not close it. If a null session is passed in, this method will create and close a session itself.
+     * @param discoveryResults the object that collects results from this method as it executes recursively
      */
-    public void discoverChildren(L parentLocation, ResourceType<L> childType, S session) {
+    private void discoverChildren(L parentLocation, ResourceType<L> childType, S session,
+            DiscoveryResults discoveryResults) {
+
         status.assertRunning(getClass(), "discoverChildren()");
         LOG.debugf("Being asked to discover children of type [%s] under parent [%s] for endpoint [%s]",
                 childType, parentLocation, getMonitoredEndpoint());
@@ -241,29 +347,39 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
             /* FIXME: resourceManager should be write-locked here over find and add */
             List<Resource<L>> parents;
             if (parentLocation != null) {
-                parents = resourceManager.findResources(parentLocation, sessionToUse.getLocationResolver());
+                parents = getResourceManager().findResources(parentLocation, sessionToUse.getLocationResolver());
             } else {
                 parents = Arrays.asList((Resource<L>) null);
             }
-            List<Resource<L>> added = new ArrayList<>();
             Discovery<L> discovery = new Discovery<>();
             for (Resource<L> parent : parents) {
-                discovery.discoverChildren(parent, childType, sessionToUse, new Consumer<Resource<L>>() {
+                discovery.discoverChildren(parent, childType, sessionToUse, this, new Consumer<Resource<L>>() {
                     public void accept(Resource<L> resource) {
-                        AddResult<L> result = resourceManager.addResource(resource);
-                        if (result.getEffect() != AddResult.Effect.UNCHANGED) {
-                            added.add(result.getResource());
+                        AddResult<L> addResult = getResourceManager().addResource(resource);
+                        switch (addResult.getEffect()) {
+                            case ADDED:
+                                discoveryResults.added(addResult.getResource());
+                                break;
+                            case MODIFIED:
+                                discoveryResults.modified(addResult.getResource());
+                                break;
+                            case UNCHANGED:
+                                discoveryResults.unchanged(addResult.getResource());
+                                break;
+                            default:
+                                throw new RuntimeException("Bad effect; report this bug: " + addResult.getEffect());
                         }
                     }
 
                     @Override
-                    public void report(Throwable e) {
-                        LOG.errorCouldNotAccess(EndpointService.this, e);
+                    public void report(Throwable t) {
+                        discoveryResults.error(t);
+                        LOG.errorCouldNotAccess(EndpointService.this, t);
                     }
                 });
             }
-            inventoryListenerSupport.fireResourcesAdded(Collections.unmodifiableList(added));
         } catch (Exception e) {
+            discoveryResults.error(e);
             LOG.errorCouldNotAccess(this, e);
         } finally {
             // We only close the session that we used if it was one we created;
@@ -286,34 +402,61 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
 
         LOG.debugf("Checking [%d] avails for endpoint [%s]", instances.size(), getMonitoredEndpoint());
 
-        try (S session = openSession()) {
-            Driver<L> driver = session.getDriver();
+        S session = null;
+        Driver<L> driver = null;
+
+        try {
+            session = openSession();
+            driver = session.getDriver();
+        } catch (Exception e) {
+            LOG.errorCouldNotAccess(this, e);
+        }
+
+        try {
             for (MeasurementInstance<L, AvailType<L>> instance : instances) {
-                AttributeLocation<L> location = instance.getAttributeLocation();
-                Object o = driver.fetchAttribute(location);
-                final Pattern pattern = instance.getType().getUpPattern();
                 Avail avail = null;
-                if (o instanceof List<?>) {
-                    /* aggregate */
-                    List<?> list = (List<?>) o;
-                    for (Object item : list) {
-                        Avail a = toAvail(pattern, item);
-                        if (avail == null) {
-                            avail = a;
+                if (driver != null) {
+                    AttributeLocation<L> location = instance.getAttributeLocation();
+                    try {
+                        Object o = driver.fetchAttribute(location);
+                        final Pattern pattern = instance.getType().getUpPattern();
+                        if (o instanceof List<?>) {
+                            /* aggregate */
+                            List<?> list = (List<?>) o;
+                            for (Object item : list) {
+                                Avail a = toAvail(pattern, item);
+                                if (avail == null) {
+                                    avail = a;
+                                } else {
+                                    avail = (a == Avail.DOWN) ? Avail.DOWN : avail;
+                                }
+                            }
                         } else {
-                            avail = (a == Avail.DOWN) ? Avail.DOWN : avail;
+                            avail = toAvail(instance.getType().getUpPattern(), o);
                         }
+                    } catch (Exception e) {
+                        LOG.errorAvailCheckFailed(e);
+                        avail = Avail.DOWN;
                     }
                 } else {
-                    avail = toAvail(instance.getType().getUpPattern(), o);
+                    avail = Avail.DOWN;
                 }
                 long ts = System.currentTimeMillis();
-                String key = generateMeasurementKey(instance);
-                AvailDataPoint dataPoint = new AvailDataPoint(key, ts, avail);
+                String key = instance.getAssociatedMetricId();
+                AvailDataPoint dataPoint = new AvailDataPoint(key, ts, avail,
+                        getMonitoredEndpoint().getEndpointConfiguration().getTenantId());
                 consumer.accept(dataPoint);
             }
         } catch (Exception e) {
-            LOG.errorCouldNotAccess(this, e);
+            LOG.errorAvailCheckFailed(e);
+        } finally {
+            if (session != null) {
+                try {
+                    session.close();
+                } catch (IOException e) {
+                    LOG.tracef(e, "Failed to close session for endpoint [%s]", session.getEndpoint());
+                }
+            }
         }
     }
 
@@ -330,26 +473,119 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
             for (MeasurementInstance<L, MetricType<L>> instance : instances) {
                 AttributeLocation<L> location = instance.getAttributeLocation();
                 Object o = driver.fetchAttribute(location);
-                double value = 0;
-                if (o instanceof List<?>) {
-                    /* aggregate */
-                    List<?> list = (List<?>) o;
-                    for (Object item : list) {
-                        double num = toDouble(item);
-                        value += num;
+                Object metricValue; // will be either a String or Double
+                if (instance.getType().getMetricType() == org.hawkular.metrics.client.common.MetricType.STRING) {
+                    StringBuilder svalue = new StringBuilder();
+                    if (o instanceof List<?>) {
+                        /* aggregate */
+                        List<?> list = (List<?>) o;
+                        for (Object item : list) {
+                            if (svalue.length() > 0) {
+                                svalue.append(",");
+                            }
+                            svalue.append(String.valueOf(item));
+                        }
+                    } else {
+                        svalue.append(String.valueOf(o));
                     }
+                    metricValue = svalue.toString();
                 } else {
-                    value = toDouble(o);
+                    double dvalue = 0;
+                    if (o instanceof List<?>) {
+                        /* aggregate */
+                        List<?> list = (List<?>) o;
+                        for (Object item : list) {
+                            double num = toDouble(item);
+                            dvalue += num;
+                        }
+                    } else {
+                        dvalue = toDouble(o);
+                    }
+                    metricValue = Double.valueOf(dvalue);
                 }
+
                 long ts = System.currentTimeMillis();
-                String key = generateMeasurementKey(instance);
-                MetricDataPoint dataPoint = new MetricDataPoint(key, ts, value, instance.getType().getMetricType());
+                String key = instance.getAssociatedMetricId();
+                String tenantId = getMonitoredEndpoint().getEndpointConfiguration().getTenantId();
+                MetricDataPoint dataPoint;
+
+                if (instance.getType().getMetricType() == org.hawkular.metrics.client.common.MetricType.STRING) {
+                    dataPoint = new StringMetricDataPoint(key, ts, (String) metricValue, tenantId);
+                } else {
+                    dataPoint = new NumericMetricDataPoint(key, ts, (Double) metricValue,
+                            instance.getType().getMetricType(), tenantId);
+                }
                 consumer.accept(dataPoint);
             }
         } catch (Exception e) {
             LOG.errorCouldNotAccess(this, e);
         }
 
+    }
+
+    @Override
+    public String generateAssociatedMetricId(MeasurementInstance<L, ? extends MeasurementType<L>> instance) {
+        // the user can configure a metric's ID in one of two places - either in the metric definition itself or
+        // in the endpoint configuration. The metric definition takes precedence in case a metric ID template
+        // is provided in both.
+        String generatedKey;
+        EndpointConfiguration config = getMonitoredEndpoint().getEndpointConfiguration();
+        String metricIdTemplate = instance.getType().getMetricIdTemplate();
+        if (metricIdTemplate == null || metricIdTemplate.isEmpty()) {
+            metricIdTemplate = config.getMetricIdTemplate();
+        }
+        if (metricIdTemplate == null || metricIdTemplate.isEmpty()) {
+            generatedKey = instance.getID().getIDString();
+        } else {
+            generatedKey = replaceTokens(instance, config, metricIdTemplate);
+        }
+        return generatedKey;
+    }
+
+    @Override
+    public Map<String, String> generateAssociatedMetricTags(
+            MeasurementInstance<L, ? extends MeasurementType<L>> instance) {
+        // Metric tags are configured in one of two places - either in the metric definition itself or in the endpoint
+        // configuration. If tags are defined in both places, all the tags found in both places are associated with
+        // the metric. If, however, both places define the same tag name, the metric definition takes precedence.
+        Map<String, String> generatedTags;
+        EndpointConfiguration config = getMonitoredEndpoint().getEndpointConfiguration();
+        Map<String, String> tokenizedTags = new HashMap<>();
+        if (config.getMetricTags() != null) {
+            tokenizedTags.putAll(config.getMetricTags());
+        }
+        if (instance.getType().getMetricTags() != null) {
+            tokenizedTags.putAll(instance.getType().getMetricTags());
+        }
+
+        if (tokenizedTags.isEmpty()) {
+            generatedTags = Collections.emptyMap();
+        } else {
+            generatedTags = new HashMap<>(tokenizedTags.size());
+            for (Map.Entry<String, String> tokenizedTag : tokenizedTags.entrySet()) {
+                String name = replaceTokens(instance, config, tokenizedTag.getKey());
+                String value = replaceTokens(instance, config, tokenizedTag.getValue());
+                generatedTags.put(name, value);
+            }
+        }
+        return generatedTags;
+    }
+
+    private String replaceTokens(MeasurementInstance<L, ?> instance, EndpointConfiguration config, String string) {
+        MeasurementUnit units = null;
+        if (instance.getType() instanceof MetricType) {
+            units = ((MetricType<?>) instance.getType()).getMetricUnits();
+        }
+
+        return string
+                .replaceAll("%FeedId", getFeedId())
+                .replaceAll("%ManagedServerName", config.getName())
+                .replaceAll("%ResourceName", instance.getResource().getName().getNameString())
+                .replaceAll("%ResourceID", instance.getResource().getID().getIDString())
+                .replaceAll("%MetricTypeName", instance.getType().getName().getNameString())
+                .replaceAll("%MetricTypeID", instance.getType().getID().getIDString())
+                .replaceAll("%MetricTypeUnits", units == null ? "" : units.toString())
+                .replaceAll("%MetricInstanceID", instance.getID().getIDString());
     }
 
     /**
@@ -360,7 +596,7 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
     public void removeResources(L location) {
         status.assertRunning(getClass(), "removeResources()");
         try (S session = openSession()) {
-            List<Resource<L>> removed = resourceManager.removeResources(location, session.getLocationResolver());
+            List<Resource<L>> removed = getResourceManager().removeResources(location, session.getLocationResolver());
             inventoryListenerSupport.fireResourcesRemoved(removed);
         } catch (Exception e) {
             LOG.errorCouldNotAccess(this, e);
@@ -415,18 +651,6 @@ public abstract class EndpointService<L, S extends Session<L>> implements Sampli
             return false;
         }
         return true;
-    }
-
-    /**
-     * Given a measurement instance, this will generate the key to be used when
-     * storing that measurement instance to storage.
-     *
-     * @param instance measurement instance whose key is to be returned
-     * @return the measurement instance key
-     */
-    public String generateMeasurementKey(MeasurementInstance<L, ?> instance) {
-        String key = instance.getID().getIDString();
-        return key;
     }
 
     private double toDouble(Object valueObject) {

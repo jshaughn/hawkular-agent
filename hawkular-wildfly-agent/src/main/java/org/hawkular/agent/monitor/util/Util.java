@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,7 @@
 package org.hawkular.agent.monitor.util;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -30,9 +31,31 @@ import java.io.UnsupportedEncodingException;
 import java.io.Writer;
 import java.net.MalformedURLException;
 import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
+import java.util.stream.Collectors;
 
+import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration;
+import org.hawkular.agent.monitor.extension.MonitorServiceConfigurationBuilder;
+import org.hawkular.agent.monitor.extension.SubsystemExtension;
+import org.hawkular.agent.monitor.log.AgentLoggers;
+import org.hawkular.agent.monitor.log.MsgLogger;
+import org.hawkular.agent.monitor.service.MonitorService;
 import org.hawkular.inventory.json.InventoryJacksonConfig;
+import org.jboss.as.controller.AttributeDefinition;
+import org.jboss.as.controller.OperationContext;
+import org.jboss.as.controller.OperationFailedException;
+import org.jboss.as.controller.PathAddress;
+import org.jboss.as.controller.PathElement;
+import org.jboss.as.controller.ReloadRequiredWriteAttributeHandler;
+import org.jboss.as.controller.RestartParentWriteAttributeHandler;
+import org.jboss.as.controller.registry.AttributeAccess;
+import org.jboss.as.controller.registry.ManagementResourceRegistration;
+import org.jboss.as.controller.registry.Resource;
+import org.jboss.dmr.ModelNode;
+import org.jboss.msc.service.ServiceName;
+import org.jboss.msc.service.ServiceRegistry;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -45,9 +68,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * @author John Mazzitelli
  */
 public class Util {
+    private static final MsgLogger log = AgentLoggers.getLogger(Util.class);
+
     private static final String ENCODING_UTF_8 = "utf-8";
     private static final int BUFFER_SIZE = 128;
+    private static final String HAWKULAR_AGENT_MACHINE_ID = "hawkular.agent.machine.id";
     private static ObjectMapper mapper;
+    private static String systemId;
+
     static {
         try {
             mapper = new ObjectMapper();
@@ -94,9 +122,10 @@ public class Util {
     }
 
     /**
-     * Encodes the given string so it can be placed inside a URL.
+     * Encodes the given string so it can be placed inside a URL. This should not be the query part of the URL, for
+     * that use {@link #urlEncodeQuery(String)}.
      *
-     * @param str string to encode
+     * @param str non-query string to encode
      * @return encoded string that can be placed inside a URL
      */
     public static String urlEncode(String str) {
@@ -104,6 +133,22 @@ public class Util {
             String encodeForForm = URLEncoder.encode(str, "UTF-8");
             String encodeForUrl = encodeForForm.replace("+", "%20");
             return encodeForUrl;
+        } catch (UnsupportedEncodingException e) {
+            throw new IllegalStateException("JVM does not support UTF-8");
+        }
+    }
+
+    /**
+     * Encodes the given string so it can be placed inside a URL. This should oly be used for
+     * the query part of the URL, for other parts, like path, use {@link #urlEncode(String)}.
+     *
+     * @param str non-query string to encode
+     * @return encoded string that can be placed inside a URL
+     */
+    public static String urlEncodeQuery(String str) {
+        try {
+            String encodeForForm = URLEncoder.encode(str, "UTF-8");
+            return encodeForForm;
         } catch (UnsupportedEncodingException e) {
             throw new IllegalStateException("JVM does not support UTF-8");
         }
@@ -193,7 +238,7 @@ public class Util {
      * closed when this method returns. WARNING: do not slurp large streams to avoid out-of-memory errors.
      *
      * @param input the input stream to slup
-     * @param the encoding to use when reading from {@code input}
+     * @param encoding the encoding to use when reading from {@code input}
      * @return the input stream data as a String
      * @throws IOException in IO problems
      */
@@ -241,5 +286,114 @@ public class Util {
     public static String base64Encode(String plainTextString) {
         String encoded = new String(Base64.getEncoder().encode(plainTextString.getBytes()));
         return encoded;
+    }
+
+    /**
+     * This will register only those given attributes that require a restart.
+     * Other attributes are left unregistered. It is the caller's responsibility to register those
+     * other attributes. Typically those other attributes support changing the service at runtime
+     * immediately when the attribute is changed (rather than requiring to restart the server to
+     * pick up the change).
+     *
+     * @param resourceRegistration there the restart attributes will be registered
+     * @param allAttributes a collection of attributes where some, all, or none will require a restart upon change.
+     */
+    public static void registerOnlyRestartAttributes(
+            ManagementResourceRegistration resourceRegistration,
+            Collection<AttributeDefinition> allAttributes) {
+        Collection<AttributeDefinition> restartResourceServicesAttributes = new ArrayList<>();
+        Collection<AttributeDefinition> restartAllServicesAttributes = new ArrayList<>();
+        for (AttributeDefinition attribDef : allAttributes) {
+            if (attribDef.getFlags().contains(AttributeAccess.Flag.RESTART_JVM)
+                    || attribDef.getFlags().contains(AttributeAccess.Flag.RESTART_ALL_SERVICES)) {
+                restartAllServicesAttributes.add(attribDef);
+            } else if (attribDef.getFlags().contains(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)) {
+                restartResourceServicesAttributes.add(attribDef);
+            }
+        }
+
+        class CustomWriteAttributeHandler extends ReloadRequiredWriteAttributeHandler {
+            public CustomWriteAttributeHandler(Collection<AttributeDefinition> attribs) {
+                super(attribs);
+            }
+
+            @Override
+            public void execute(OperationContext context, ModelNode operation) throws OperationFailedException {
+                if (!context.isBooting()) {
+                    ServiceName name = SubsystemExtension.SERVICE_NAME;
+                    ServiceRegistry serviceRegistry = context.getServiceRegistry(true);
+                    MonitorService agent = (MonitorService) serviceRegistry.getRequiredService(name).getValue();
+                    if (agent.isImmutable()) {
+                        throw new OperationFailedException(
+                                "The agent is configured to be immutable - no changes are allowed.");
+                    }
+                }
+
+                super.execute(context, operation);
+            }
+        }
+
+        ReloadRequiredWriteAttributeHandler handler = new CustomWriteAttributeHandler(restartAllServicesAttributes);
+        RestartParentWriteAttributeHandler restartParentHandler = //
+                new WildflyCompatibilityUtils.EAP6MonitorServiceRestartParentAttributeHandler(
+                        restartResourceServicesAttributes);
+
+        for (AttributeDefinition attribDef : restartAllServicesAttributes) {
+            resourceRegistration.registerReadWriteAttribute(attribDef, null, handler);
+        }
+        for (AttributeDefinition attribDef : restartResourceServicesAttributes) {
+            resourceRegistration.registerReadWriteAttribute(attribDef, null, restartParentHandler);
+        }
+    }
+
+    /**
+     * Used by extension classes that need to get the subsystem's configuration.
+     *
+     * @param context context used to obtain the config
+     * @return the subsystem config
+     * @throws OperationFailedException
+     */
+    public static MonitorServiceConfiguration getMonitorServiceConfiguration(OperationContext context)
+            throws OperationFailedException {
+        PathAddress subsystemAddress = PathAddress
+                .pathAddress(PathElement.pathElement("subsystem", SubsystemExtension.SUBSYSTEM_NAME));
+        ModelNode subsystemConfig = Resource.Tools.readModel(context.readResourceFromRoot(subsystemAddress));
+        MonitorServiceConfiguration config = new MonitorServiceConfigurationBuilder(subsystemConfig, context).build();
+        return config;
+    }
+
+    /**
+     * Tries to determine the system ID for the machine where this JVM is located.
+     * First check if the user explicitly set it. If not try to read it from
+     * /etc/machine-id
+     *
+     * @return system ID or null if cannot determine
+     */
+    public static String getSystemId() {
+
+        if (systemId == null) {
+            systemId = System.getProperty(HAWKULAR_AGENT_MACHINE_ID);
+            if (systemId != null) {
+                log.infof("MachineId was explicitly set to [%s]", systemId);
+            }
+        }
+
+        if (systemId == null) {
+            File machineIdFile = new File("/etc/machine-id");
+            if (machineIdFile.exists() && machineIdFile.canRead()) {
+                try (Reader reader = new InputStreamReader(new FileInputStream(machineIdFile))) {
+                    systemId = new BufferedReader(reader).lines().collect(Collectors.joining("\n"));
+                } catch (IOException e) {
+                    log.warnf(e, "/etc/machine-id exists and is readable, but exception was raised when reading it");
+                    systemId = "";
+                }
+            } else {
+                log.warnf("/etc/machine-id does not exist or is unreadable");
+                // for the future, we might want to check additional places and try different things
+                systemId = "";
+            }
+        }
+
+        return (systemId.isEmpty()) ? null : systemId;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,13 +16,17 @@
  */
 package org.hawkular.agent.monitor.inventory;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Defines an operation that can be executed on the managed resource.
  *
  * The {@link #getName()} is the user-visible name (e.g. a human-readable, descriptive name).
- * The {@link #getOperationName()} is the actual operation that is to be executed on the managed resource.
+ * The {@link #getInternalName()} is the actual operation that is to be executed on the managed resource.
  * For example, {@link #getName()} could return "Deploy Your Application" with the actual operation
- * to be executed on the managed resource, {@link #getOperationName()}, being "deploy-app".
+ * to be executed on the managed resource, {@link #getInternalName()}, being "deploy-app".
  *
  * @author John Mazzitelli
  *
@@ -30,7 +34,9 @@ package org.hawkular.agent.monitor.inventory;
  */
 public final class Operation<L> extends NodeLocationProvider<L> {
 
-    private final String operationName;
+    private final boolean modifies;
+    private final String internalName;
+    private final List<OperationParam> parameters;
 
     /**
      * Creates an operation definition based on the given information.
@@ -43,13 +49,22 @@ public final class Operation<L> extends NodeLocationProvider<L> {
      *             This name could also be useful as a default user-visible name (which perhaps could be overridden
      *             for i18n purposes) and can also be useful for logging.
      * @param location identifies the location of the resource to whom this operation definition belongs
-     * @param operationName the actual name of the operation as it is known to the actual resource being managed.
+     * @param internalName the actual name of the operation as it is known to the actual resource being managed.
      *                      This is the name that is used when telling the managed resource what operation to invoke.
      *                      It may or may not be the same as <code>name</code>.
+     * @param modifies if true this means the operation can modify the remote resource
+     * @param params Additional params for this operation definition, e.g. coming from operation-dmr. Can be null.
      */
-    public Operation(ID id, Name name, L location, String operationName) {
+    public Operation(ID id, Name name, L location, String internalName, boolean modifies,
+            List<OperationParam> params) {
         super(id, name, location);
-        this.operationName = operationName;
+        this.internalName = internalName;
+        this.modifies = modifies;
+        if (params != null && !params.isEmpty()) {
+            parameters = Collections.unmodifiableList(new ArrayList<>(params));
+        } else {
+            parameters = Collections.emptyList();
+        }
     }
 
     /**
@@ -58,8 +73,23 @@ public final class Operation<L> extends NodeLocationProvider<L> {
      *         when being asked to execute this operation.
      *         This is not the user-visible name (see {@link #getName()} for that).
      */
-    public String getOperationName() {
-        return operationName;
+    public String getInternalName() {
+        return internalName;
     }
 
+    /**
+     * @return if true this means the operation can modify the remote resource - either its configuration
+     *         settings or (if applicable) its deployments. If an agent is configured as "immutable"
+     *         these operations with modifies=true will not be allowed to execute.
+     */
+    public boolean getModifies() {
+        return modifies;
+    }
+
+    /**
+     * @return parameters defined for this operation - will be empty (not null) if no parameters exist
+     */
+    public List<OperationParam> getParameters() {
+        return parameters;
+    }
 }

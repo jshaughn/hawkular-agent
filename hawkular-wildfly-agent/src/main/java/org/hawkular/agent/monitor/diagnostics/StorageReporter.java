@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.DiagnosticsConfiguration;
 import org.hawkular.agent.monitor.storage.MetricDataPoint;
+import org.hawkular.agent.monitor.storage.NumericMetricDataPoint;
 import org.hawkular.agent.monitor.storage.StorageAdapter;
 import org.hawkular.metrics.client.common.MetricType;
 
@@ -86,11 +87,12 @@ public class StorageReporter extends ScheduledReporter {
             for (Map.Entry<String, Gauge> entry : gauges.entrySet()) {
                 Gauge<Integer> gauge = entry.getValue();
                 String key = feedId + "." + ourName + "." + entry.getKey();
-                samples.add(new MetricDataPoint(
+                samples.add(new NumericMetricDataPoint(
                         key,
                         System.currentTimeMillis(),
                         gauge.getValue(),
-                        MetricType.GAUGE));
+                        MetricType.GAUGE,
+                        null));
             }
             storageAdapter.storeMetrics(samples, 0);
         }
@@ -99,11 +101,12 @@ public class StorageReporter extends ScheduledReporter {
             Set<MetricDataPoint> samples = new HashSet<>(counters.size());
             for (Map.Entry<String, Counter> entry : counters.entrySet()) {
                 String key = feedId + "." + ourName + "." + entry.getKey();
-                samples.add(new MetricDataPoint(
+                samples.add(new NumericMetricDataPoint(
                         key,
                         System.currentTimeMillis(),
                         entry.getValue().getCount(),
-                        MetricType.COUNTER));
+                        MetricType.COUNTER,
+                        null));
             }
             storageAdapter.storeMetrics(samples, 0);
 
@@ -114,11 +117,12 @@ public class StorageReporter extends ScheduledReporter {
             for (Map.Entry<String, Meter> entry : meters.entrySet()) {
                 Meter meter = entry.getValue();
                 String key = feedId + "." + ourName + "." + entry.getKey();
-                samples.add(new MetricDataPoint(
+                samples.add(new NumericMetricDataPoint(
                         key,
                         System.currentTimeMillis(),
                         meter.getOneMinuteRate(),
-                        MetricType.GAUGE));
+                        MetricType.GAUGE,
+                        null));
             }
             storageAdapter.storeMetrics(samples, 0);
         }
@@ -128,11 +132,12 @@ public class StorageReporter extends ScheduledReporter {
             for (Map.Entry<String, Timer> entry : timers.entrySet()) {
                 Timer timer = entry.getValue();
                 String key = feedId + "." + ourName + "." + entry.getKey();
-                samples.add(new MetricDataPoint(
+                samples.add(new NumericMetricDataPoint(
                         key,
                         System.currentTimeMillis(),
                         timer.getSnapshot().get75thPercentile(),
-                        MetricType.GAUGE));
+                        MetricType.GAUGE,
+                        null));
             }
             storageAdapter.storeMetrics(samples, 0);
         }
@@ -155,7 +160,8 @@ public class StorageReporter extends ScheduledReporter {
         private MetricFilter filter;
         private String feedId;
 
-        private Builder(MetricRegistry registry, MonitorServiceConfiguration.DiagnosticsConfiguration diagnosticsConfig,
+        private Builder(MetricRegistry registry,
+                MonitorServiceConfiguration.DiagnosticsConfiguration diagnosticsConfig,
                 StorageAdapter storageAdapter) {
             this.registry = registry;
             this.diagnosticsConfig = diagnosticsConfig;

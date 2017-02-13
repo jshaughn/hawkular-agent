@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +33,6 @@ import javax.management.ObjectName;
 import org.hawkular.agent.monitor.api.Avail;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.DiagnosticsConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.DiagnosticsReportTo;
-import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.DynamicEndpointConfiguration;
-import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.DynamicProtocolConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.EndpointConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.GlobalConfiguration;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.ProtocolConfiguration;
@@ -47,9 +45,8 @@ import org.hawkular.agent.monitor.inventory.ID;
 import org.hawkular.agent.monitor.inventory.Interval;
 import org.hawkular.agent.monitor.inventory.MetricType;
 import org.hawkular.agent.monitor.inventory.Name;
-import org.hawkular.agent.monitor.inventory.NameSet;
-import org.hawkular.agent.monitor.inventory.NameSet.NameSetBuilder;
 import org.hawkular.agent.monitor.inventory.Operation;
+import org.hawkular.agent.monitor.inventory.OperationParam;
 import org.hawkular.agent.monitor.inventory.ResourceConfigurationPropertyType;
 import org.hawkular.agent.monitor.inventory.ResourceType;
 import org.hawkular.agent.monitor.inventory.ResourceType.Builder;
@@ -59,11 +56,14 @@ import org.hawkular.agent.monitor.inventory.TypeSets;
 import org.hawkular.agent.monitor.log.AgentLoggers;
 import org.hawkular.agent.monitor.log.MsgLogger;
 import org.hawkular.agent.monitor.protocol.dmr.DMRNodeLocation;
+import org.hawkular.agent.monitor.protocol.jmx.JMXEndpointService;
 import org.hawkular.agent.monitor.protocol.jmx.JMXNodeLocation;
 import org.hawkular.agent.monitor.protocol.platform.Constants;
+import org.hawkular.agent.monitor.protocol.platform.Constants.PlatformMetricType;
 import org.hawkular.agent.monitor.protocol.platform.Constants.PlatformResourceType;
 import org.hawkular.agent.monitor.protocol.platform.PlatformNodeLocation;
 import org.hawkular.agent.monitor.protocol.platform.PlatformPath;
+import org.hawkular.agent.monitor.util.WildflyCompatibilityUtils;
 import org.jboss.as.controller.OperationContext;
 import org.jboss.as.controller.OperationFailedException;
 import org.jboss.as.controller.PathAddress;
@@ -81,7 +81,6 @@ public class MonitorServiceConfigurationBuilder {
     private ProtocolConfiguration.Builder<DMRNodeLocation> dmrConfigBuilder;
     private ProtocolConfiguration.Builder<JMXNodeLocation> jmxConfigBuilder;
     private ProtocolConfiguration.Builder<PlatformNodeLocation> platformConfigBuilder;
-    private DynamicProtocolConfiguration.Builder prometheusConfigBuilder;
 
     private DiagnosticsConfiguration diagnostics;
     private StorageAdapterConfiguration storageAdapter;
@@ -98,19 +97,15 @@ public class MonitorServiceConfigurationBuilder {
         dmrConfigBuilder = ProtocolConfiguration.builder();
         jmxConfigBuilder = ProtocolConfiguration.builder();
         platformConfigBuilder = ProtocolConfiguration.builder();
-        prometheusConfigBuilder = DynamicProtocolConfiguration.builder();
 
         TypeSets.Builder<DMRNodeLocation> dmrTypeSetsBuilder = TypeSets.builder();
         TypeSets.Builder<JMXNodeLocation> jmxTypeSetsBuilder = TypeSets.builder();
-        Map<Name, NameSet> prometheusMetricSets = new HashMap<>();
 
-        determineMetricSetDmr(config, context, dmrTypeSetsBuilder);
-        determineAvailSetDmr(config, context, dmrTypeSetsBuilder);
+        determineMetricSetDmr(config, context, dmrTypeSetsBuilder, globalConfiguration);
+        determineAvailSetDmr(config, context, dmrTypeSetsBuilder, globalConfiguration);
 
-        determineMetricSetJmx(config, context, jmxTypeSetsBuilder);
-        determineAvailSetJmx(config, context, jmxTypeSetsBuilder);
-
-        determineMetricSetPrometheus(config, context, prometheusMetricSets);
+        determineMetricSetJmx(config, context, jmxTypeSetsBuilder, globalConfiguration);
+        determineAvailSetJmx(config, context, jmxTypeSetsBuilder, globalConfiguration);
 
         // make sure to call this AFTER the metric sets and avail sets have been determined
         determineResourceTypeSetDmr(config, context, dmrTypeSetsBuilder);
@@ -119,12 +114,13 @@ public class MonitorServiceConfigurationBuilder {
 
         dmrConfigBuilder.typeSets(dmrTypeSetsBuilder.build());
         jmxConfigBuilder.typeSets(jmxTypeSetsBuilder.build());
-        prometheusConfigBuilder.metricSets(prometheusMetricSets);
 
         TypeSets<PlatformNodeLocation> platformTypeSets = buildPlatformTypeSets(config, context);
         platformConfigBuilder.typeSets(platformTypeSets);
         if (!platformTypeSets.isDisabledOrEmpty()) {
-            EndpointConfiguration endpoint = new EndpointConfiguration("platform", true, null, null, null, Avail.DOWN);
+            String machineId = determinePlatformMachineId(config, context);
+            EndpointConfiguration endpoint = new EndpointConfiguration("platform", true, null, null, null, Avail.DOWN,
+                    null, null, null, Collections.singletonMap(Constants.MACHINE_ID, machineId));
             platformConfigBuilder.endpoint(endpoint);
         }
 
@@ -137,16 +133,17 @@ public class MonitorServiceConfigurationBuilder {
 
         return new MonitorServiceConfiguration(globalConfiguration,
                 diagnostics, storageAdapter, dmrConfigBuilder.build(), jmxConfigBuilder.build(),
-                platformConfigBuilder.build(), prometheusConfigBuilder.build());
+                platformConfigBuilder.build());
     }
 
     private static void determineMetricSetDmr(ModelNode config,
             OperationContext context,
-            org.hawkular.agent.monitor.inventory.TypeSets.Builder<DMRNodeLocation>//
-            typeSetsBuilder)
-                    throws OperationFailedException {
+            org.hawkular.agent.monitor.inventory.TypeSets.Builder<DMRNodeLocation> typeSetsBuilder,
+            GlobalConfiguration globalConfiguration)
+            throws OperationFailedException {
 
         boolean enabled = false;
+        long minInterval = globalConfiguration.getMinCollectionIntervalSeconds();
 
         if (config.hasDefined(DMRMetricSetDefinition.METRIC_SET)) {
             List<Property> metricSetsList = config.get(DMRMetricSetDefinition.METRIC_SET).asPropertyList();
@@ -157,27 +154,52 @@ public class MonitorServiceConfigurationBuilder {
                 }
                 ModelNode metricSetValueNode = metricSetProperty.getValue();
 
-                TypeSetBuilder<MetricType<DMRNodeLocation>> typeSetBuilder =
-                        TypeSet.<MetricType<DMRNodeLocation>> builder()
-                                .name(new Name(metricSetName))
-                                .enabled(getBoolean(metricSetValueNode, context, DMRMetricSetAttributes.ENABLED));
+                TypeSetBuilder<MetricType<DMRNodeLocation>> typeSetBuilder = TypeSet
+                        .<MetricType<DMRNodeLocation>> builder()
+                        .name(new Name(metricSetName))
+                        .enabled(getBoolean(metricSetValueNode, context, DMRMetricSetAttributes.ENABLED));
 
                 if (metricSetValueNode.hasDefined(DMRMetricDefinition.METRIC)) {
                     List<Property> metricsList = metricSetValueNode.get(DMRMetricDefinition.METRIC).asPropertyList();
                     for (Property metricProperty : metricsList) {
-                        String metricName = metricSetName + "~" + metricProperty.getName();
+                        String metricId = metricSetName + "~" + metricProperty.getName();
+                        String metricName = metricProperty.getName();
                         ModelNode metricValueNode = metricProperty.getValue();
+                        String attributeString = getString(metricValueNode, context, DMRMetricAttributes.ATTRIBUTE);
+                        PathAddress pathAddress = getPath(metricValueNode, context, DMRMetricAttributes.PATH);
+                        boolean re = getBoolean(metricValueNode, context, DMRMetricAttributes.RESOLVE_EXPRESSIONS);
+                        boolean id = getBoolean(metricValueNode, context, DMRMetricAttributes.INCLUDE_DEFAULTS);
+                        String metricIdTemplate = getString(metricValueNode, context,
+                                DMRMetricAttributes.METRIC_ID_TEMPLATE);
+                        Map<String, String> metricTags = getMapFromString(metricValueNode, context,
+                                DMRMetricAttributes.METRIC_TAGS);
+
                         AttributeLocation<DMRNodeLocation> location = new AttributeLocation<>(
-                                new DMRNodeLocation(getPath(metricValueNode, context, DMRMetricAttributes.PATH)),
-                                getString(metricValueNode, context, DMRMetricAttributes.ATTRIBUTE));
+                                new DMRNodeLocation(pathAddress, re, id),
+                                attributeString);
+
+                        Interval interval = new Interval(
+                                getInt(metricValueNode, context, DMRMetricAttributes.INTERVAL),
+                                getTimeUnit(metricValueNode, context, DMRMetricAttributes.TIME_UNITS));
+                        long intervalSecs = interval.seconds();
+                        if (intervalSecs > 0 && intervalSecs < minInterval) {
+                            log.warnf("Metric [%s] interval being changed from [%s]s to minimum of [%s]s",
+                                    metricName, intervalSecs, minInterval);
+                            interval = new Interval((int) minInterval, TimeUnit.SECONDS);
+                        }
+
                         MetricType<DMRNodeLocation> metric = new MetricType<>(
-                                ID.NULL_ID,
+                                new ID(metricId),
                                 new Name(metricName),
                                 location,
-                                new Interval(getInt(metricValueNode, context, DMRMetricAttributes.INTERVAL),
-                                        getTimeUnit(metricValueNode, context, DMRMetricAttributes.TIME_UNITS)),
+                                interval,
                                 getMeasurementUnit(metricValueNode, context, DMRMetricAttributes.METRIC_UNITS),
-                                getMetricType(metricValueNode, context, DMRMetricAttributes.METRIC_TYPE));
+                                getMetricType(metricValueNode, context, DMRMetricAttributes.METRIC_TYPE),
+                                metricIdTemplate,
+                                metricTags);
+                        if (metric.isDisabled()) {
+                            log.debugf("Metric [%s] is Disabled for collection.", metric.getName());
+                        }
                         typeSetBuilder.type(metric);
                     }
                 }
@@ -221,9 +243,12 @@ public class MonitorServiceConfigurationBuilder {
 
     private static void determineAvailSetDmr(ModelNode config,
             OperationContext context,
-            TypeSets.Builder<DMRNodeLocation> typeSetsBuilder)
-                    throws OperationFailedException {
+            TypeSets.Builder<DMRNodeLocation> typeSetsBuilder,
+            GlobalConfiguration globalConfiguration)
+            throws OperationFailedException {
+
         boolean enabled = false;
+        long minInterval = globalConfiguration.getMinCollectionIntervalSeconds();
 
         if (config.hasDefined(DMRAvailSetDefinition.AVAIL_SET)) {
             List<Property> availSetsList = config.get(DMRAvailSetDefinition.AVAIL_SET).asPropertyList();
@@ -233,26 +258,51 @@ public class MonitorServiceConfigurationBuilder {
                     log.warnCommaInName(availSetName);
                 }
                 ModelNode availSetValueNode = availSetProperty.getValue();
-                TypeSetBuilder<AvailType<DMRNodeLocation>> typeSetBuilder =
-                        TypeSet.<AvailType<DMRNodeLocation>> builder()
-                                .name(new Name(availSetName))
-                                .enabled(getBoolean(availSetValueNode, context, DMRAvailSetAttributes.ENABLED));
+                TypeSetBuilder<AvailType<DMRNodeLocation>> typeSetBuilder = TypeSet
+                        .<AvailType<DMRNodeLocation>> builder()
+                        .name(new Name(availSetName))
+                        .enabled(getBoolean(availSetValueNode, context, DMRAvailSetAttributes.ENABLED));
 
                 if (availSetValueNode.hasDefined(DMRAvailDefinition.AVAIL)) {
                     List<Property> availsList = availSetValueNode.get(DMRAvailDefinition.AVAIL).asPropertyList();
                     for (Property availProperty : availsList) {
-                        String availName = availSetName + "~" + availProperty.getName();
+                        String availId = availSetName + "~" + availProperty.getName();
+                        String availName = availProperty.getName();
                         ModelNode availValueNode = availProperty.getValue();
-                        AttributeLocation<DMRNodeLocation> location = new AttributeLocation<>(
-                                new DMRNodeLocation(getPath(availValueNode, context, DMRAvailAttributes.PATH)),
-                                getString(availValueNode, context, DMRAvailAttributes.ATTRIBUTE));
+                        String attributeString = getString(availValueNode, context, DMRAvailAttributes.ATTRIBUTE);
+                        PathAddress pathAddress = getPath(availValueNode, context, DMRAvailAttributes.PATH);
+                        boolean re = getBoolean(availValueNode, context, DMRAvailAttributes.RESOLVE_EXPRESSIONS);
+                        boolean id = getBoolean(availValueNode, context, DMRAvailAttributes.INCLUDE_DEFAULTS);
+                        String metricIdTemplate = getString(availValueNode, context,
+                                DMRAvailAttributes.METRIC_ID_TEMPLATE);
+                        Map<String, String> metricTags = getMapFromString(availValueNode, context,
+                                DMRAvailAttributes.METRIC_TAGS);
 
-                        AvailType<DMRNodeLocation> avail = new AvailType<DMRNodeLocation>(ID.NULL_ID,
+                        AttributeLocation<DMRNodeLocation> location = new AttributeLocation<>(
+                                new DMRNodeLocation(pathAddress, re, id),
+                                attributeString);
+
+                        Interval interval = new Interval(
+                                getInt(availValueNode, context, DMRMetricAttributes.INTERVAL),
+                                getTimeUnit(availValueNode, context, DMRMetricAttributes.TIME_UNITS));
+                        long intervalSecs = interval.seconds();
+                        if (intervalSecs > 0 && intervalSecs < minInterval) {
+                            log.warnf("Avail [%s] interval being changed from [%s]s to minimum of [%s]s",
+                                    availName, intervalSecs, minInterval);
+                            interval = new Interval((int) minInterval, TimeUnit.SECONDS);
+                        }
+
+                        AvailType<DMRNodeLocation> avail = new AvailType<DMRNodeLocation>(
+                                new ID(availId),
                                 new Name(availName),
                                 location,
-                                new Interval(getInt(availValueNode, context, DMRAvailAttributes.INTERVAL),
-                                        getTimeUnit(availValueNode, context, DMRAvailAttributes.TIME_UNITS)),
-                                Pattern.compile(getString(availValueNode, context, DMRAvailAttributes.UP_REGEX)));
+                                interval,
+                                Pattern.compile(getString(availValueNode, context, DMRAvailAttributes.UP_REGEX)),
+                                metricIdTemplate,
+                                metricTags);
+                        if (avail.isDisabled()) {
+                            log.debugf("Avail [%s] is Disabled for collection.", avail.getName());
+                        }
                         typeSetBuilder.type(avail);
                     }
                     TypeSet<AvailType<DMRNodeLocation>> typeSet = typeSetBuilder.build();
@@ -268,10 +318,12 @@ public class MonitorServiceConfigurationBuilder {
 
     private static void determineMetricSetJmx(ModelNode config,
             OperationContext context,
-            TypeSets.Builder<JMXNodeLocation> typeSetsBuilder)
-                    throws OperationFailedException {
+            TypeSets.Builder<JMXNodeLocation> typeSetsBuilder,
+            GlobalConfiguration globalConfiguration)
+            throws OperationFailedException {
 
         boolean enabled = false;
+        long minInterval = globalConfiguration.getMinCollectionIntervalSeconds();
 
         if (config.hasDefined(JMXMetricSetDefinition.METRIC_SET)) {
             List<Property> metricSetsList = config.get(JMXMetricSetDefinition.METRIC_SET).asPropertyList();
@@ -281,29 +333,50 @@ public class MonitorServiceConfigurationBuilder {
                     log.warnCommaInName(metricSetName);
                 }
                 ModelNode metricSetValueNode = metricSetProperty.getValue();
-                TypeSetBuilder<MetricType<JMXNodeLocation>> typeSetBuilder =
-                        TypeSet.<MetricType<JMXNodeLocation>> builder()
-                                .name(new Name(metricSetName))
-                                .enabled(getBoolean(metricSetValueNode, context, JMXMetricSetAttributes.ENABLED));
+                TypeSetBuilder<MetricType<JMXNodeLocation>> typeSetBuilder = TypeSet
+                        .<MetricType<JMXNodeLocation>> builder()
+                        .name(new Name(metricSetName))
+                        .enabled(getBoolean(metricSetValueNode, context, JMXMetricSetAttributes.ENABLED));
                 if (metricSetValueNode.hasDefined(JMXMetricDefinition.METRIC)) {
                     List<Property> metricsList = metricSetValueNode.get(JMXMetricDefinition.METRIC).asPropertyList();
                     for (Property metricProperty : metricsList) {
-                        String metricName = metricSetName + "~" + metricProperty.getName();
+                        String metricId = metricSetName + "~" + metricProperty.getName();
+                        String metricName = metricProperty.getName();
 
                         ModelNode metricValueNode = metricProperty.getValue();
                         String objectName = getString(metricValueNode, context, JMXMetricAttributes.OBJECT_NAME);
+                        String metricIdTemplate = getString(metricValueNode, context,
+                                JMXMetricAttributes.METRIC_ID_TEMPLATE);
+                        Map<String, String> metricTags = getMapFromString(metricValueNode, context,
+                                JMXMetricAttributes.METRIC_TAGS);
+
                         try {
                             AttributeLocation<JMXNodeLocation> location = new AttributeLocation<>(
                                     new JMXNodeLocation(objectName),
                                     getString(metricValueNode, context, JMXMetricAttributes.ATTRIBUTE));
 
-                            MetricType<JMXNodeLocation> metric = new MetricType<JMXNodeLocation>(ID.NULL_ID,
+                            Interval interval = new Interval(
+                                    getInt(metricValueNode, context, DMRMetricAttributes.INTERVAL),
+                                    getTimeUnit(metricValueNode, context, DMRMetricAttributes.TIME_UNITS));
+                            long intervalSecs = interval.seconds();
+                            if (intervalSecs > 0 && intervalSecs < minInterval) {
+                                log.warnf("Metric [%s] interval being changed from [%s]s to minimum of [%s]s",
+                                        metricName, intervalSecs, minInterval);
+                                interval = new Interval((int) minInterval, TimeUnit.SECONDS);
+                            }
+
+                            MetricType<JMXNodeLocation> metric = new MetricType<JMXNodeLocation>(
+                                    new ID(metricId),
                                     new Name(metricName),
                                     location,
-                                    new Interval(getInt(metricValueNode, context, JMXMetricAttributes.INTERVAL),
-                                            getTimeUnit(metricValueNode, context, JMXMetricAttributes.TIME_UNITS)),
+                                    interval,
                                     getMeasurementUnit(metricValueNode, context, JMXMetricAttributes.METRIC_UNITS),
-                                    getMetricType(metricValueNode, context, JMXMetricAttributes.METRIC_TYPE));
+                                    getMetricType(metricValueNode, context, JMXMetricAttributes.METRIC_TYPE),
+                                    metricIdTemplate,
+                                    metricTags);
+                            if (metric.isDisabled()) {
+                                log.debugf("Metric [%s] is Disabled for collection.", metric.getName());
+                            }
                             typeSetBuilder.type(metric);
                         } catch (MalformedObjectNameException e) {
                             log.warnMalformedJMXObjectName(objectName, e);
@@ -323,10 +396,12 @@ public class MonitorServiceConfigurationBuilder {
 
     private static void determineAvailSetJmx(ModelNode config,
             OperationContext context,
-            TypeSets.Builder<JMXNodeLocation> typeSetsBuilder)
-                    throws OperationFailedException {
+            TypeSets.Builder<JMXNodeLocation> typeSetsBuilder,
+            GlobalConfiguration globalConfiguration)
+            throws OperationFailedException {
 
         boolean enabled = false;
+        long minInterval = globalConfiguration.getMinCollectionIntervalSeconds();
 
         if (config.hasDefined(JMXAvailSetDefinition.AVAIL_SET)) {
             List<Property> availSetsList = config.get(JMXAvailSetDefinition.AVAIL_SET).asPropertyList();
@@ -336,27 +411,48 @@ public class MonitorServiceConfigurationBuilder {
                     log.warnCommaInName(availSetName);
                 }
                 ModelNode availSetValueNode = availSetProperty.getValue();
-                TypeSetBuilder<AvailType<JMXNodeLocation>> typeSetBuilder =
-                        TypeSet.<AvailType<JMXNodeLocation>> builder() //
-                                .name(new Name(availSetName)) //
-                                .enabled(getBoolean(availSetValueNode, context, JMXAvailSetAttributes.ENABLED));
+                TypeSetBuilder<AvailType<JMXNodeLocation>> typeSetBuilder = TypeSet
+                        .<AvailType<JMXNodeLocation>> builder() //
+                        .name(new Name(availSetName)) //
+                        .enabled(getBoolean(availSetValueNode, context, JMXAvailSetAttributes.ENABLED));
                 if (availSetValueNode.hasDefined(JMXAvailDefinition.AVAIL)) {
                     List<Property> availsList = availSetValueNode.get(JMXAvailDefinition.AVAIL).asPropertyList();
                     for (Property availProperty : availsList) {
-                        String availName = availSetName + "~" + availProperty.getName();
+                        String availId = availSetName + "~" + availProperty.getName();
+                        String availName = availProperty.getName();
                         ModelNode availValueNode = availProperty.getValue();
-
                         String objectName = getString(availValueNode, context, JMXAvailAttributes.OBJECT_NAME);
+                        String metricIdTemplate = getString(availValueNode, context,
+                                JMXAvailAttributes.METRIC_ID_TEMPLATE);
+                        Map<String, String> metricTags = getMapFromString(availValueNode, context,
+                                JMXAvailAttributes.METRIC_TAGS);
+
                         try {
                             AttributeLocation<JMXNodeLocation> location = new AttributeLocation<>(
                                     new JMXNodeLocation(objectName),
                                     getString(availValueNode, context, JMXAvailAttributes.ATTRIBUTE));
 
-                            AvailType<JMXNodeLocation> avail = new AvailType<JMXNodeLocation>(ID.NULL_ID,
-                                    new Name(availName), location,
-                                    new Interval(getInt(availValueNode, context, JMXAvailAttributes.INTERVAL),
-                                            getTimeUnit(availValueNode, context, JMXAvailAttributes.TIME_UNITS)),
-                                    Pattern.compile(getString(availValueNode, context, JMXAvailAttributes.UP_REGEX)));
+                            Interval interval = new Interval(
+                                    getInt(availValueNode, context, DMRMetricAttributes.INTERVAL),
+                                    getTimeUnit(availValueNode, context, DMRMetricAttributes.TIME_UNITS));
+                            long intervalSecs = interval.seconds();
+                            if (intervalSecs > 0 && intervalSecs < minInterval) {
+                                log.warnf("Avail [%s] interval being changed from [%s]s to minimum of [%s]s",
+                                        availName, intervalSecs, minInterval);
+                                interval = new Interval((int) minInterval, TimeUnit.SECONDS);
+                            }
+
+                            AvailType<JMXNodeLocation> avail = new AvailType<JMXNodeLocation>(
+                                    new ID(availId),
+                                    new Name(availName),
+                                    location,
+                                    interval,
+                                    Pattern.compile(getString(availValueNode, context, JMXAvailAttributes.UP_REGEX)),
+                                    metricIdTemplate,
+                                    metricTags);
+                            if (avail.isDisabled()) {
+                                log.debugf("Avail [%s] is Disabled for collection.", avail.getName());
+                            }
                             typeSetBuilder.type(avail);
                         } catch (MalformedObjectNameException e) {
                             log.warnMalformedJMXObjectName(objectName, e);
@@ -374,60 +470,27 @@ public class MonitorServiceConfigurationBuilder {
         }
     }
 
-    private static void determineMetricSetPrometheus(ModelNode config,
-            OperationContext context,
-            Map<Name, NameSet> namedMetricSets)
-                    throws OperationFailedException {
+    private static String determinePlatformMachineId(ModelNode config, OperationContext context)
+            throws OperationFailedException {
 
-        boolean enabled = false;
-
-        if (config.hasDefined(PrometheusMetricSetDefinition.METRIC_SET)) {
-            List<Property> metricSetsList = config.get(PrometheusMetricSetDefinition.METRIC_SET).asPropertyList();
-            for (Property metricSetProperty : metricSetsList) {
-                NameSetBuilder nameSetBuilder = NameSet.builder();
-
-                String metricSetName = metricSetProperty.getName();
-                if (metricSetName.indexOf(',') > -1) {
-                    log.warnCommaInName(metricSetName);
-                }
-                nameSetBuilder.nameOfSet(new Name(metricSetName));
-
-                ModelNode metricSetValueNode = metricSetProperty.getValue();
-
-                enabled = getBoolean(metricSetValueNode, context, PrometheusMetricSetAttributes.ENABLED);
-                nameSetBuilder.enabled(enabled);
-
-                if (metricSetValueNode.hasDefined(PrometheusMetricDefinition.METRIC)) {
-                    List<Property> metricsList = metricSetValueNode.get(PrometheusMetricDefinition.METRIC)
-                            .asPropertyList();
-                    for (Property metricProperty : metricsList) {
-                        String metricName = metricProperty.getName();
-                        try {
-                            Pattern.compile(metricName); // metric name can be a regex, make sure it can compile
-                            nameSetBuilder.name(new Name(metricName));
-                        } catch (Exception e) {
-                            throw new OperationFailedException("Metric name is an invalid regex: " + metricName);
-                        }
-
-                        // there are no attributes (other than 'name')to process
-                        //ModelNode metricValueNode = metricProperty.getValue();
-                    }
-
-                    NameSet nameSet = nameSetBuilder.build();
-                    namedMetricSets.put(nameSet.getName(), nameSet);
-
-                    enabled = enabled || !nameSet.isDisabledOrEmpty();
-                }
-            }
-        }
-        if (!enabled) {
-            log.infoNoEnabledMetricsConfigured("Prometheus");
+        if (!config.hasDefined(PlatformDefinition.PLATFORM)) {
+            return null; // not monitoring platform, so we don't collect machine ID
         }
 
+        List<Property> asPropertyList = config.get(PlatformDefinition.PLATFORM).asPropertyList();
+        if (asPropertyList.size() == 0) {
+            return null; // not monitoring platform, so we don't collect machine ID
+        } else if (asPropertyList.size() > 1) {
+            throw new IllegalArgumentException("Only one platform config allowed: " + config.toJSONString(true));
+        }
+
+        ModelNode platformValueNode = asPropertyList.get(0).getValue();
+        String machineId = getString(platformValueNode, context, PlatformAttributes.MACHINE_ID);
+        return machineId;
     }
 
     private static TypeSets<PlatformNodeLocation> buildPlatformTypeSets(ModelNode config, OperationContext context)
-                    throws OperationFailedException {
+            throws OperationFailedException {
 
         // assume they are disabled unless configured otherwise
 
@@ -446,31 +509,95 @@ public class MonitorServiceConfigurationBuilder {
 
         ModelNode platformValueNode = asPropertyList.get(0).getValue();
         boolean typeSetsEnabled = getBoolean(platformValueNode, context, PlatformAttributes.ENABLED);
-        if (typeSetsEnabled == false) {
+        if (!typeSetsEnabled) {
             log.debugf("Platform monitoring is disabled");
             return TypeSets.empty();
         }
 
         TypeSets.Builder<PlatformNodeLocation> typeSetsBuilder = TypeSets.builder();
+
         // all the type metadata is dependent upon the capabilities of the oshi SystemInfo API
 
         // since platform monitoring is enabled, we will always have at least the root OS type
-        final Name osName = PlatformResourceType.OPERATING_SYSTEM.getName();
+        final ID osId = PlatformResourceType.OPERATING_SYSTEM.getResourceTypeId();
+        final Name osName = PlatformResourceType.OPERATING_SYSTEM.getResourceTypeName();
 
         Builder<?, PlatformNodeLocation> rootTypeBldr = ResourceType.<PlatformNodeLocation> builder()
+                .id(osId)
                 .name(osName)
                 .location(new PlatformNodeLocation(
                         PlatformPath.builder().any(PlatformResourceType.OPERATING_SYSTEM).build()))
                 .resourceNameTemplate("%s");
-        populateMetricAndAvailTypesForResourceType(rootTypeBldr, typeSetsBuilder);
-        ResourceType<PlatformNodeLocation> rootType = rootTypeBldr.build();
 
-        TypeSet<ResourceType<PlatformNodeLocation>> rootTypeSet =
-                TypeSet.<ResourceType<PlatformNodeLocation>> builder()
-                        .enabled(true)
-                        .name(osName)
-                        .type(rootType)
-                        .build();
+        ResourceConfigurationPropertyType<PlatformNodeLocation> machineIdConfigType = //
+                new ResourceConfigurationPropertyType<>(ID.NULL_ID,
+                        new Name(Constants.MACHINE_ID),
+                        new AttributeLocation<>(
+                                new PlatformNodeLocation(PlatformPath.empty()), Constants.MACHINE_ID));
+        rootTypeBldr.resourceConfigurationPropertyType(machineIdConfigType);
+
+        // OS top-level metrics
+
+        Interval osInterval = new Interval(getInt(platformValueNode, context, PlatformAttributes.INTERVAL),
+                TimeUnit.valueOf(getString(platformValueNode, context, PlatformAttributes.TIME_UNITS).toUpperCase()));
+
+        MetricType<PlatformNodeLocation> systemCpuLoad = new MetricType<PlatformNodeLocation>(
+                PlatformMetricType.OS_SYS_CPU_LOAD.getMetricTypeId(),
+                PlatformMetricType.OS_SYS_CPU_LOAD.getMetricTypeName(),
+                new AttributeLocation<>(
+                        new PlatformNodeLocation(PlatformPath.empty()),
+                        PlatformMetricType.OS_SYS_CPU_LOAD.getMetricTypeId().getIDString()),
+                osInterval,
+                MeasurementUnit.PERCENTAGE,
+                org.hawkular.metrics.client.common.MetricType.GAUGE,
+                null,
+                null);
+
+        MetricType<PlatformNodeLocation> systemLoadAverage = new MetricType<PlatformNodeLocation>(
+                PlatformMetricType.OS_SYS_LOAD_AVG.getMetricTypeId(),
+                PlatformMetricType.OS_SYS_LOAD_AVG.getMetricTypeName(),
+                new AttributeLocation<>(
+                        new PlatformNodeLocation(PlatformPath.empty()),
+                        PlatformMetricType.OS_SYS_LOAD_AVG.getMetricTypeId().getIDString()),
+                osInterval,
+                MeasurementUnit.NONE,
+                org.hawkular.metrics.client.common.MetricType.GAUGE,
+                null,
+                null);
+
+        MetricType<PlatformNodeLocation> processCount = new MetricType<PlatformNodeLocation>(
+                PlatformMetricType.OS_PROCESS_COUNT.getMetricTypeId(),
+                PlatformMetricType.OS_PROCESS_COUNT.getMetricTypeName(),
+                new AttributeLocation<>(
+                        new PlatformNodeLocation(PlatformPath.empty()),
+                        PlatformMetricType.OS_PROCESS_COUNT.getMetricTypeId().getIDString()),
+                osInterval,
+                MeasurementUnit.NONE,
+                org.hawkular.metrics.client.common.MetricType.GAUGE,
+                null,
+                null);
+
+        TypeSet<MetricType<PlatformNodeLocation>> osMetrics = TypeSet
+                .<MetricType<PlatformNodeLocation>> builder()
+                .name(PlatformResourceType.OPERATING_SYSTEM.getResourceTypeName())
+                .type(systemCpuLoad)
+                .type(systemLoadAverage)
+                .type(processCount)
+                .build();
+
+        typeSetsBuilder.metricTypeSet(osMetrics);
+
+        rootTypeBldr.metricSetName(osMetrics.getName());
+        populateMetricAndAvailTypesForResourceType(rootTypeBldr, typeSetsBuilder);
+
+        ResourceType<PlatformNodeLocation> rootType = rootTypeBldr.build();
+        TypeSet<ResourceType<PlatformNodeLocation>> rootTypeSet = TypeSet
+                .<ResourceType<PlatformNodeLocation>> builder()
+                .enabled(true)
+                .name(osName)
+                .type(rootType)
+                .build();
+
         typeSetsBuilder.resourceTypeSet(rootTypeSet);
 
         // now add children types if they are enabled
@@ -482,54 +609,61 @@ public class MonitorServiceConfigurationBuilder {
                 boolean enabled = getBoolean(fileStoresNode, context, FileStoresAttributes.ENABLED);
                 if (enabled) {
                     Interval interval = new Interval(getInt(fileStoresNode, context, FileStoresAttributes.INTERVAL),
-                            TimeUnit.valueOf(getString(fileStoresNode, context,
-                                    FileStoresAttributes.TIME_UNITS).toUpperCase()));
+                            TimeUnit.valueOf(getString(fileStoresNode, context, FileStoresAttributes.TIME_UNITS)
+                                    .toUpperCase()));
 
-                    MetricType<PlatformNodeLocation> usableSpace = new MetricType<PlatformNodeLocation>(null,
-                            Constants.FILE_STORE_USABLE_SPACE,
-                            new AttributeLocation<PlatformNodeLocation>(
+                    MetricType<PlatformNodeLocation> usableSpace = new MetricType<PlatformNodeLocation>(
+                            PlatformMetricType.FILE_STORE_USABLE_SPACE.getMetricTypeId(),
+                            PlatformMetricType.FILE_STORE_USABLE_SPACE.getMetricTypeName(),
+                            new AttributeLocation<>(
                                     new PlatformNodeLocation(PlatformPath.empty()),
-                                    Constants.FILE_STORE_USABLE_SPACE.getNameString()),
+                                    PlatformMetricType.FILE_STORE_USABLE_SPACE.getMetricTypeId().getIDString()),
                             interval,
                             MeasurementUnit.BYTES,
-                            org.hawkular.metrics.client.common.MetricType.GAUGE);
+                            org.hawkular.metrics.client.common.MetricType.GAUGE,
+                            null,
+                            null);
 
-                    MetricType<PlatformNodeLocation> totalSpace = new MetricType<PlatformNodeLocation>(null,
-                            Constants.FILE_STORE_TOTAL_SPACE,
-                            new AttributeLocation<PlatformNodeLocation>(
+                    MetricType<PlatformNodeLocation> totalSpace = new MetricType<PlatformNodeLocation>(
+                            PlatformMetricType.FILE_STORE_TOTAL_SPACE.getMetricTypeId(),
+                            PlatformMetricType.FILE_STORE_TOTAL_SPACE.getMetricTypeName(),
+                            new AttributeLocation<>(
                                     new PlatformNodeLocation(PlatformPath.empty()),
-                                    Constants.FILE_STORE_TOTAL_SPACE.getNameString()),
+                                    PlatformMetricType.FILE_STORE_TOTAL_SPACE.getMetricTypeId().getIDString()),
                             interval,
                             MeasurementUnit.BYTES,
-                            org.hawkular.metrics.client.common.MetricType.GAUGE);
+                            org.hawkular.metrics.client.common.MetricType.GAUGE,
+                            null,
+                            null);
 
-                    TypeSet<MetricType<PlatformNodeLocation>> fileStoreMetrics =
-                            TypeSet.<MetricType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.FILE_STORE.getName())
-                                    .type(usableSpace)
-                                    .type(totalSpace)
-                                    .build();
+                    TypeSet<MetricType<PlatformNodeLocation>> fileStoreMetrics = TypeSet
+                            .<MetricType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.FILE_STORE.getResourceTypeName())
+                            .type(usableSpace)
+                            .type(totalSpace)
+                            .build();
 
                     typeSetsBuilder.metricTypeSet(fileStoreMetrics);
 
                     PlatformNodeLocation fileStoreLocation = new PlatformNodeLocation(
                             PlatformPath.builder().any(PlatformResourceType.FILE_STORE).build());
                     Builder<?, PlatformNodeLocation> fileStoreBldr = ResourceType.<PlatformNodeLocation> builder()
-                            .name(PlatformResourceType.FILE_STORE.getName())
+                            .id(PlatformResourceType.FILE_STORE.getResourceTypeId())
+                            .name(PlatformResourceType.FILE_STORE.getResourceTypeName())
                             .location(fileStoreLocation)
                             .resourceNameTemplate(
-                                    PlatformResourceType.FILE_STORE.getName().getNameString() + " [%s]")
+                                    PlatformResourceType.FILE_STORE.getResourceTypeName().getNameString() + " [%s]")
                             .parent(rootType.getName())
                             .metricSetName(fileStoreMetrics.getName());
 
                     populateMetricAndAvailTypesForResourceType(fileStoreBldr, typeSetsBuilder);
 
                     ResourceType<PlatformNodeLocation> fileStore = fileStoreBldr.build();
-                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet =
-                            TypeSet.<ResourceType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.FILE_STORE.getName())
-                                    .type(fileStore)
-                                    .build();
+                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet = TypeSet
+                            .<ResourceType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.FILE_STORE.getResourceTypeName())
+                            .type(fileStore)
+                            .build();
 
                     typeSetsBuilder.resourceTypeSet(typeSet);
                 }
@@ -546,53 +680,60 @@ public class MonitorServiceConfigurationBuilder {
                 boolean enabled = getBoolean(memoryNode, context, MemoryAttributes.ENABLED);
                 if (enabled) {
                     Interval interval = new Interval(getInt(memoryNode, context, MemoryAttributes.INTERVAL),
-                            TimeUnit.valueOf(getString(memoryNode, context,
-                                    MemoryAttributes.TIME_UNITS).toUpperCase()));
+                            TimeUnit.valueOf(
+                                    getString(memoryNode, context, MemoryAttributes.TIME_UNITS).toUpperCase()));
 
-                    MetricType<PlatformNodeLocation> available = new MetricType<PlatformNodeLocation>(null,
-                            Constants.MEMORY_AVAILABLE,
-                            new AttributeLocation<PlatformNodeLocation>(
+                    MetricType<PlatformNodeLocation> available = new MetricType<PlatformNodeLocation>(
+                            PlatformMetricType.MEMORY_AVAILABLE.getMetricTypeId(),
+                            PlatformMetricType.MEMORY_AVAILABLE.getMetricTypeName(),
+                            new AttributeLocation<>(
                                     new PlatformNodeLocation(PlatformPath.empty()),
-                                    Constants.MEMORY_AVAILABLE.getNameString()),
+                                    PlatformMetricType.MEMORY_AVAILABLE.getMetricTypeId().getIDString()),
                             interval,
                             MeasurementUnit.BYTES,
-                            org.hawkular.metrics.client.common.MetricType.GAUGE);
+                            org.hawkular.metrics.client.common.MetricType.GAUGE,
+                            null,
+                            null);
 
-                    MetricType<PlatformNodeLocation> total = new MetricType<PlatformNodeLocation>(null,
-                            Constants.MEMORY_TOTAL,
-                            new AttributeLocation<PlatformNodeLocation>(
+                    MetricType<PlatformNodeLocation> total = new MetricType<PlatformNodeLocation>(
+                            PlatformMetricType.MEMORY_TOTAL.getMetricTypeId(),
+                            PlatformMetricType.MEMORY_TOTAL.getMetricTypeName(),
+                            new AttributeLocation<>(
                                     new PlatformNodeLocation(PlatformPath.empty()),
-                                    Constants.MEMORY_TOTAL.getNameString()),
+                                    PlatformMetricType.MEMORY_TOTAL.getMetricTypeId().getIDString()),
                             interval,
                             MeasurementUnit.BYTES,
-                            org.hawkular.metrics.client.common.MetricType.GAUGE);
+                            org.hawkular.metrics.client.common.MetricType.GAUGE,
+                            null,
+                            null);
 
-                    TypeSet<MetricType<PlatformNodeLocation>> memoryMetrics =
-                            TypeSet.<MetricType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.MEMORY.getName())
-                                    .type(available)
-                                    .type(total)
-                                    .build();
+                    TypeSet<MetricType<PlatformNodeLocation>> memoryMetrics = TypeSet
+                            .<MetricType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.MEMORY.getResourceTypeName())
+                            .type(available)
+                            .type(total)
+                            .build();
 
                     typeSetsBuilder.metricTypeSet(memoryMetrics);
 
                     PlatformNodeLocation memoryLocation = new PlatformNodeLocation(
                             PlatformPath.builder().any(PlatformResourceType.MEMORY).build());
                     Builder<?, PlatformNodeLocation> memoryBldr = ResourceType.<PlatformNodeLocation> builder()
-                            .name(PlatformResourceType.MEMORY.getName())
+                            .id(PlatformResourceType.MEMORY.getResourceTypeId())
+                            .name(PlatformResourceType.MEMORY.getResourceTypeName())
                             .parent(rootType.getName())
                             .location(memoryLocation)
                             .metricSetName(memoryMetrics.getName())
-                            .resourceNameTemplate(PlatformResourceType.MEMORY.getName().getNameString());
+                            .resourceNameTemplate(PlatformResourceType.MEMORY.getResourceTypeName().getNameString());
 
                     populateMetricAndAvailTypesForResourceType(memoryBldr, typeSetsBuilder);
 
                     ResourceType<PlatformNodeLocation> memory = memoryBldr.build();
-                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet =
-                            TypeSet.<ResourceType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.MEMORY.getName())
-                                    .type(memory)
-                                    .build();
+                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet = TypeSet
+                            .<ResourceType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.MEMORY.getResourceTypeName())
+                            .type(memory)
+                            .build();
 
                     typeSetsBuilder.resourceTypeSet(typeSet);
                 }
@@ -609,44 +750,49 @@ public class MonitorServiceConfigurationBuilder {
                 boolean enabled = getBoolean(processorsNode, context, ProcessorsAttributes.ENABLED);
                 if (enabled) {
                     Interval interval = new Interval(getInt(processorsNode, context, ProcessorsAttributes.INTERVAL),
-                            TimeUnit.valueOf(getString(processorsNode, context,
-                                    ProcessorsAttributes.TIME_UNITS).toUpperCase()));
+                            TimeUnit.valueOf(getString(processorsNode, context, ProcessorsAttributes.TIME_UNITS)
+                                    .toUpperCase()));
 
                     // this is the Processor.getProcessorCpuLoadBetweenTicks value
-                    MetricType<PlatformNodeLocation> cpuUsage = new MetricType<PlatformNodeLocation>(null,
-                            Constants.PROCESSOR_CPU_USAGE,
-                            new AttributeLocation<PlatformNodeLocation>(
+                    MetricType<PlatformNodeLocation> cpuUsage = new MetricType<PlatformNodeLocation>(
+                            PlatformMetricType.PROCESSOR_CPU_USAGE.getMetricTypeId(),
+                            PlatformMetricType.PROCESSOR_CPU_USAGE.getMetricTypeName(),
+                            new AttributeLocation<>(
                                     new PlatformNodeLocation(PlatformPath.empty()),
-                                    Constants.PROCESSOR_CPU_USAGE.getNameString()),
+                                    PlatformMetricType.PROCESSOR_CPU_USAGE.getMetricTypeId().getIDString()),
                             interval,
                             MeasurementUnit.PERCENTAGE,
-                            org.hawkular.metrics.client.common.MetricType.GAUGE);
+                            org.hawkular.metrics.client.common.MetricType.GAUGE,
+                            null,
+                            null);
 
-                    TypeSet<MetricType<PlatformNodeLocation>> processorMetrics =
-                            TypeSet.<MetricType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.PROCESSOR.getName())
-                                    .type(cpuUsage)
-                                    .build();
+                    TypeSet<MetricType<PlatformNodeLocation>> processorMetrics = TypeSet
+                            .<MetricType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.PROCESSOR.getResourceTypeName())
+                            .type(cpuUsage)
+                            .build();
 
                     typeSetsBuilder.metricTypeSet(processorMetrics);
 
                     PlatformNodeLocation processorsLocation = new PlatformNodeLocation(
                             PlatformPath.builder().any(PlatformResourceType.PROCESSOR).build());
                     Builder<?, PlatformNodeLocation> processorBldr = ResourceType.<PlatformNodeLocation> builder()
-                            .name(PlatformResourceType.PROCESSOR.getName())
+                            .id(PlatformResourceType.PROCESSOR.getResourceTypeId())
+                            .name(PlatformResourceType.PROCESSOR.getResourceTypeName())
                             .parent(rootType.getName())
                             .location(processorsLocation)
                             .metricSetName(processorMetrics.getName())
-                            .resourceNameTemplate(PlatformResourceType.PROCESSOR.getName().getNameString() + " [%s]");
+                            .resourceNameTemplate(
+                                    PlatformResourceType.PROCESSOR.getResourceTypeName().getNameString() + " [%s]");
 
                     populateMetricAndAvailTypesForResourceType(processorBldr, typeSetsBuilder);
 
                     ResourceType<PlatformNodeLocation> processor = processorBldr.build();
-                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet =
-                            TypeSet.<ResourceType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.PROCESSOR.getName())
-                                    .type(processor)
-                                    .build();
+                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet = TypeSet
+                            .<ResourceType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.PROCESSOR.getResourceTypeName())
+                            .type(processor)
+                            .build();
 
                     typeSetsBuilder.resourceTypeSet(typeSet);
                 }
@@ -664,54 +810,62 @@ public class MonitorServiceConfigurationBuilder {
                 if (enabled) {
                     Interval interval = new Interval(
                             getInt(powerSourcesNode, context, PowerSourcesAttributes.INTERVAL),
-                            TimeUnit.valueOf(getString(powerSourcesNode, context,
-                                    PowerSourcesAttributes.TIME_UNITS).toUpperCase()));
+                            TimeUnit.valueOf(getString(powerSourcesNode, context, PowerSourcesAttributes.TIME_UNITS)
+                                    .toUpperCase()));
 
-                    MetricType<PlatformNodeLocation> remainingCap = new MetricType<PlatformNodeLocation>(null,
-                            Constants.POWER_SOURCE_REMAINING_CAPACITY,
-                            new AttributeLocation<PlatformNodeLocation>(
+                    MetricType<PlatformNodeLocation> remainingCap = new MetricType<PlatformNodeLocation>(
+                            PlatformMetricType.POWER_SOURCE_REMAINING_CAPACITY.getMetricTypeId(),
+                            PlatformMetricType.POWER_SOURCE_REMAINING_CAPACITY.getMetricTypeName(),
+                            new AttributeLocation<>(
                                     new PlatformNodeLocation(PlatformPath.empty()),
-                                    Constants.POWER_SOURCE_REMAINING_CAPACITY.getNameString()),
+                                    PlatformMetricType.POWER_SOURCE_REMAINING_CAPACITY.getMetricTypeId()
+                                            .getIDString()),
                             interval,
                             MeasurementUnit.PERCENTAGE,
-                            org.hawkular.metrics.client.common.MetricType.GAUGE);
+                            org.hawkular.metrics.client.common.MetricType.GAUGE,
+                            null,
+                            null);
 
-                    MetricType<PlatformNodeLocation> timeRemaining = new MetricType<PlatformNodeLocation>(null,
-                            Constants.POWER_SOURCE_TIME_REMAINING,
-                            new AttributeLocation<PlatformNodeLocation>(
+                    MetricType<PlatformNodeLocation> timeRemaining = new MetricType<PlatformNodeLocation>(
+                            PlatformMetricType.POWER_SOURCE_TIME_REMAINING.getMetricTypeId(),
+                            PlatformMetricType.POWER_SOURCE_TIME_REMAINING.getMetricTypeName(),
+                            new AttributeLocation<>(
                                     new PlatformNodeLocation(PlatformPath.empty()),
-                                    Constants.POWER_SOURCE_TIME_REMAINING.getNameString()),
+                                    PlatformMetricType.POWER_SOURCE_TIME_REMAINING.getMetricTypeId().getIDString()),
                             interval,
                             MeasurementUnit.SECONDS,
-                            org.hawkular.metrics.client.common.MetricType.GAUGE);
+                            org.hawkular.metrics.client.common.MetricType.GAUGE,
+                            null,
+                            null);
 
-                    TypeSet<MetricType<PlatformNodeLocation>> powerSourceMetrics =
-                            TypeSet.<MetricType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.POWER_SOURCE.getName())
-                                    .type(remainingCap)
-                                    .type(timeRemaining)
-                                    .build();
+                    TypeSet<MetricType<PlatformNodeLocation>> powerSourceMetrics = TypeSet
+                            .<MetricType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.POWER_SOURCE.getResourceTypeName())
+                            .type(remainingCap)
+                            .type(timeRemaining)
+                            .build();
 
                     typeSetsBuilder.metricTypeSet(powerSourceMetrics);
 
                     PlatformNodeLocation powerSourcesLocation = new PlatformNodeLocation(
                             PlatformPath.builder().any(PlatformResourceType.POWER_SOURCE).build());
                     Builder<?, PlatformNodeLocation> powerSourceBldr = ResourceType.<PlatformNodeLocation> builder()
-                            .name(PlatformResourceType.POWER_SOURCE.getName())
+                            .id(PlatformResourceType.POWER_SOURCE.getResourceTypeId())
+                            .name(PlatformResourceType.POWER_SOURCE.getResourceTypeName())
                             .parent(rootType.getName())
                             .location(powerSourcesLocation)
                             .metricSetName(powerSourceMetrics.getName())
                             .resourceNameTemplate(
-                                    PlatformResourceType.POWER_SOURCE.getName().getNameString() + " [%s]");
+                                    PlatformResourceType.POWER_SOURCE.getResourceTypeName().getNameString() + " [%s]");
 
                     populateMetricAndAvailTypesForResourceType(powerSourceBldr, typeSetsBuilder);
 
                     ResourceType<PlatformNodeLocation> powerSource = powerSourceBldr.build();
-                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet =
-                            TypeSet.<ResourceType<PlatformNodeLocation>> builder()
-                            .name(PlatformResourceType.POWER_SOURCE.getName())
-                                    .type(powerSource)
-                                    .build();
+                    TypeSet<ResourceType<PlatformNodeLocation>> typeSet = TypeSet
+                            .<ResourceType<PlatformNodeLocation>> builder()
+                            .name(PlatformResourceType.POWER_SOURCE.getResourceTypeName())
+                            .type(powerSource)
+                            .build();
 
                     typeSetsBuilder.resourceTypeSet(typeSet);
                 }
@@ -753,7 +907,7 @@ public class MonitorServiceConfigurationBuilder {
 
     private static StorageAdapterConfiguration determineStorageAdapterConfig(ModelNode config,
             OperationContext context)
-                    throws OperationFailedException {
+            throws OperationFailedException {
 
         if (!config.hasDefined(StorageDefinition.STORAGE_ADAPTER)) {
             throw new IllegalArgumentException("Missing storage adapter configuration: " + config.toJSONString(true));
@@ -783,16 +937,15 @@ public class MonitorServiceConfigurationBuilder {
                 StorageAttributes.SERVER_OUTBOUND_SOCKET_BINDING_REF);
         String tenantId = getString(storageAdapterConfig, context, StorageAttributes.TENANT_ID);
         String feedId = getString(storageAdapterConfig, context, StorageAttributes.FEED_ID);
-        String accountsContext = getString(storageAdapterConfig, context, StorageAttributes.ACCOUNTS_CONTEXT);
         String inventoryContext = getString(storageAdapterConfig, context, StorageAttributes.INVENTORY_CONTEXT);
         String metricsContext = getString(storageAdapterConfig, context, StorageAttributes.METRICS_CONTEXT);
         String feedcommContext = getString(storageAdapterConfig, context, StorageAttributes.FEEDCOMM_CONTEXT);
         String username = getString(storageAdapterConfig, context, StorageAttributes.USERNAME);
         String password = getString(storageAdapterConfig, context, StorageAttributes.PASSWORD);
-        String key = getString(storageAdapterConfig, context, StorageAttributes.SECURITY_KEY);
-        String secret = getString(storageAdapterConfig, context, StorageAttributes.SECURITY_SECRET);
         String typeStr = getString(storageAdapterConfig, context, StorageAttributes.TYPE);
         StorageReportTo type = MonitorServiceConfiguration.StorageReportTo.valueOf(typeStr.toUpperCase());
+        int connectTimeoutSeconds = getInt(storageAdapterConfig, context, StorageAttributes.CONNECT_TIMEOUT_SECONDS);
+        int readTimeoutSeconds = getInt(storageAdapterConfig, context, StorageAttributes.READ_TIMEOUT_SECONDS);
 
         if (useSSL) {
             if (securityRealm == null) {
@@ -807,37 +960,43 @@ public class MonitorServiceConfigurationBuilder {
             }
         }
 
-        if ((username == null || password == null) && (key == null || secret == null)) {
-            throw new IllegalArgumentException("Must have a username/password or security key/secret");
+        if (username == null || password == null) {
+            throw new IllegalArgumentException("Must have a username/password");
         }
 
-        return new StorageAdapterConfiguration(type, username, password, key, secret, tenantId, feedId, url, useSSL,
-                serverOutboundSocketBindingRef, accountsContext, inventoryContext, metricsContext, feedcommContext,
-                keystorePath, keystorePassword, securityRealm);
+        return new StorageAdapterConfiguration(type, username, password, tenantId, feedId, url, useSSL,
+                serverOutboundSocketBindingRef, inventoryContext, metricsContext, feedcommContext,
+                keystorePath, keystorePassword, securityRealm, connectTimeoutSeconds, readTimeoutSeconds);
     }
 
     private static GlobalConfiguration determineGlobalConfig(ModelNode config, OperationContext context)
             throws OperationFailedException {
         boolean subsystemEnabled = getBoolean(config, context, SubsystemAttributes.ENABLED);
+        boolean immutable = getBoolean(config, context, SubsystemAttributes.IMMUTABLE);
+        boolean inContainer = getBoolean(config, context, SubsystemAttributes.IN_CONTAINER);
         String apiJndi = getString(config, context, SubsystemAttributes.API_JNDI);
-        int autoDiscoveryScanPeriodSecs = getInt(config, context, SubsystemAttributes.AUTO_DISCOVERY_SCAN_PERIOD_SECS);
+        int autoDiscoveryScanPeriodSecs = getInt(config, context,
+                SubsystemAttributes.AUTO_DISCOVERY_SCAN_PERIOD_SECONDS);
+        int minCollectionIntervalSecs = getInt(config, context,
+                SubsystemAttributes.MIN_COLLECTION_INTERVAL_SECS);
         int numDmrSchedulerThreads = getInt(config, context, SubsystemAttributes.NUM_DMR_SCHEDULER_THREADS);
         int metricDispatcherBufferSize = getInt(config, context, SubsystemAttributes.METRIC_DISPATCHER_BUFFER_SIZE);
         int metricDispatcherMaxBatchSize = getInt(config, context,
                 SubsystemAttributes.METRIC_DISPATCHER_MAX_BATCH_SIZE);
         int availDispatcherBufferSize = getInt(config, context, SubsystemAttributes.AVAIL_DISPATCHER_BUFFER_SIZE);
         int availDispatcherMaxBatchSize = getInt(config, context, SubsystemAttributes.AVAIL_DISPATCHER_MAX_BATCH_SIZE);
+        int pingDispatcherPeriodSeconds = getInt(config, context, SubsystemAttributes.PING_DISPATCHER_PERIOD_SECONDS);
 
-        return new GlobalConfiguration(subsystemEnabled, apiJndi, autoDiscoveryScanPeriodSecs,
-                numDmrSchedulerThreads,
-                metricDispatcherBufferSize, metricDispatcherMaxBatchSize, availDispatcherBufferSize,
-                availDispatcherMaxBatchSize);
+        return new GlobalConfiguration(subsystemEnabled, immutable, inContainer, apiJndi, autoDiscoveryScanPeriodSecs,
+                minCollectionIntervalSecs, numDmrSchedulerThreads, metricDispatcherBufferSize,
+                metricDispatcherMaxBatchSize, availDispatcherBufferSize, availDispatcherMaxBatchSize,
+                pingDispatcherPeriodSeconds);
     }
 
     private static void determineResourceTypeSetDmr(ModelNode config,
             OperationContext context,
             TypeSets.Builder<DMRNodeLocation> typeSetsBuilder)
-                    throws OperationFailedException {
+            throws OperationFailedException {
         boolean enabled = false;
 
         if (config.hasDefined(DMRResourceTypeSetDefinition.RESOURCE_TYPE_SET)) {
@@ -846,11 +1005,11 @@ public class MonitorServiceConfigurationBuilder {
             for (Property resourceTypeSetProperty : resourceTypeSetsList) {
                 String resourceTypeSetName = resourceTypeSetProperty.getName();
                 ModelNode resourceTypeSetValueNode = resourceTypeSetProperty.getValue();
-                TypeSetBuilder<ResourceType<DMRNodeLocation>> typeSetBuilder =
-                        TypeSet.<ResourceType<DMRNodeLocation>> builder()
-                                .name(new Name(resourceTypeSetName))
-                                .enabled(getBoolean(resourceTypeSetValueNode, context,
-                                        DMRResourceTypeSetAttributes.ENABLED));
+                TypeSetBuilder<ResourceType<DMRNodeLocation>> typeSetBuilder = TypeSet
+                        .<ResourceType<DMRNodeLocation>> builder()
+                        .name(new Name(resourceTypeSetName))
+                        .enabled(getBoolean(resourceTypeSetValueNode, context,
+                                DMRResourceTypeSetAttributes.ENABLED));
                 if (resourceTypeSetName.indexOf(',') > -1) {
                     log.warnCommaInName(resourceTypeSetName);
                 }
@@ -863,16 +1022,15 @@ public class MonitorServiceConfigurationBuilder {
 
                         String resourceTypeName = resourceTypeProperty.getName();
 
-                        Builder<?, DMRNodeLocation> resourceTypeBuilder =
-                                ResourceType.<DMRNodeLocation> builder()
-                                        .id(ID.NULL_ID)
-                                        .name(new Name(resourceTypeName))
-                                        .location(new DMRNodeLocation(getPath(resourceTypeValueNode, context,
-                                                DMRResourceTypeAttributes.PATH)))
-                                        .resourceNameTemplate(getString(resourceTypeValueNode, context,
-                                                DMRResourceTypeAttributes.RESOURCE_NAME_TEMPLATE))
-                                        .parents(getNameListFromString(resourceTypeValueNode, context,
-                                                DMRResourceTypeAttributes.PARENTS));
+                        Builder<?, DMRNodeLocation> resourceTypeBuilder = ResourceType.<DMRNodeLocation> builder()
+                                .id(ID.NULL_ID)
+                                .name(new Name(resourceTypeName))
+                                .location(new DMRNodeLocation(
+                                        getPath(resourceTypeValueNode, context, DMRResourceTypeAttributes.PATH)))
+                                .resourceNameTemplate(getString(resourceTypeValueNode, context,
+                                        DMRResourceTypeAttributes.RESOURCE_NAME_TEMPLATE))
+                                .parents(getNameListFromString(resourceTypeValueNode, context,
+                                        DMRResourceTypeAttributes.PARENTS));
 
                         List<Name> metricSets = getNameListFromString(resourceTypeValueNode, context,
                                 DMRResourceTypeAttributes.METRIC_SETS);
@@ -888,13 +1046,23 @@ public class MonitorServiceConfigurationBuilder {
                             List<Property> operationList = opModelNode.asPropertyList();
                             for (Property operationProperty : operationList) {
                                 ModelNode operationValueNode = operationProperty.getValue();
-                                String operationName = operationProperty.getName();
+                                String name = operationProperty.getName();
+
+                                List<OperationParam> params = getOpParamListFromOpNode(operationValueNode, context);
 
                                 PathAddress pathAddress = getPath(operationValueNode, context,
                                         DMROperationAttributes.PATH);
-                                Operation<DMRNodeLocation> op = new Operation<>(ID.NULL_ID, new Name(operationName),
-                                        new DMRNodeLocation(pathAddress), getString(operationValueNode, context,
-                                                DMROperationAttributes.OPERATION_NAME));
+                                String internalName = getString(operationValueNode, context,
+                                        DMROperationAttributes.INTERNAL_NAME);
+                                boolean modifies = getBoolean(operationValueNode, context,
+                                        DMROperationAttributes.MODIFIES);
+                                Operation<DMRNodeLocation> op = new Operation<>(
+                                        ID.NULL_ID,
+                                        new Name(name),
+                                        new DMRNodeLocation(pathAddress),
+                                        internalName,
+                                        modifies,
+                                        params);
                                 resourceTypeBuilder.operation(op);
                             }
                         }
@@ -907,14 +1075,20 @@ public class MonitorServiceConfigurationBuilder {
                             for (Property configProperty : configList) {
                                 ModelNode configValueNode = configProperty.getValue();
                                 String configName = configProperty.getName();
-                                ResourceConfigurationPropertyType<DMRNodeLocation> configType = //
-                                        new ResourceConfigurationPropertyType<>(
-                                                ID.NULL_ID, new Name(configName),
-                                                new AttributeLocation<DMRNodeLocation>(
-                                                        new DMRNodeLocation(getPath(configValueNode, context,
-                                                                DMRResourceConfigAttributes.PATH)),
-                                                        getString(configValueNode, context,
-                                                                DMRResourceConfigAttributes.ATTRIBUTE)));
+                                String attributeString = getString(configValueNode, context,
+                                        DMRResourceConfigAttributes.ATTRIBUTE);
+                                PathAddress pathAddress = getPath(configValueNode, context,
+                                        DMRResourceConfigAttributes.PATH);
+                                boolean re = getBoolean(configValueNode, context,
+                                        DMRResourceConfigAttributes.RESOLVE_EXPRESSIONS);
+                                boolean id = getBoolean(configValueNode, context,
+                                        DMRResourceConfigAttributes.INCLUDE_DEFAULTS);
+
+                                ResourceConfigurationPropertyType<DMRNodeLocation> configType = new ResourceConfigurationPropertyType<>(
+                                        ID.NULL_ID, new Name(configName),
+                                        new AttributeLocation<DMRNodeLocation>(
+                                                new DMRNodeLocation(pathAddress, re, id),
+                                                attributeString));
                                 resourceTypeBuilder.resourceConfigurationPropertyType(configType);
                             }
                         }
@@ -943,7 +1117,7 @@ public class MonitorServiceConfigurationBuilder {
 
     private static void determineResourceTypeSetJmx(ModelNode config,
             OperationContext context, TypeSets.Builder<JMXNodeLocation> typeSetsBuilder)
-                    throws OperationFailedException {
+            throws OperationFailedException {
         boolean enabled = false;
 
         if (config.hasDefined(JMXResourceTypeSetDefinition.RESOURCE_TYPE_SET)) {
@@ -952,11 +1126,11 @@ public class MonitorServiceConfigurationBuilder {
             for (Property resourceTypeSetProperty : resourceTypeSetsList) {
                 String resourceTypeSetName = resourceTypeSetProperty.getName();
                 ModelNode resourceTypeSetValueNode = resourceTypeSetProperty.getValue();
-                TypeSetBuilder<ResourceType<JMXNodeLocation>> typeSetBuilder =
-                        TypeSet.<ResourceType<JMXNodeLocation>> builder()
-                                .name(new Name(resourceTypeSetName))
-                                .enabled(getBoolean(resourceTypeSetValueNode, context,
-                                        JMXResourceTypeSetAttributes.ENABLED));
+                TypeSetBuilder<ResourceType<JMXNodeLocation>> typeSetBuilder = TypeSet
+                        .<ResourceType<JMXNodeLocation>> builder()
+                        .name(new Name(resourceTypeSetName))
+                        .enabled(getBoolean(resourceTypeSetValueNode, context,
+                                JMXResourceTypeSetAttributes.ENABLED));
                 if (resourceTypeSetName.indexOf(',') > -1) {
                     log.warnCommaInName(resourceTypeSetName);
                 }
@@ -971,15 +1145,14 @@ public class MonitorServiceConfigurationBuilder {
                         String objectName = getObjectName(resourceTypeValueNode, context,
                                 JMXResourceTypeAttributes.OBJECT_NAME);
                         try {
-                            Builder<?, JMXNodeLocation> resourceTypeBuilder =
-                                    ResourceType.<JMXNodeLocation> builder()
-                                            .id(ID.NULL_ID)
-                                            .name(new Name(resourceTypeName))
-                                            .location(new JMXNodeLocation(objectName))
-                                            .resourceNameTemplate(getString(resourceTypeValueNode, context,
-                                                    JMXResourceTypeAttributes.RESOURCE_NAME_TEMPLATE))
-                                            .parents(getNameListFromString(resourceTypeValueNode, context,
-                                                    JMXResourceTypeAttributes.PARENTS));
+                            Builder<?, JMXNodeLocation> resourceTypeBuilder = ResourceType.<JMXNodeLocation> builder()
+                                    .id(ID.NULL_ID)
+                                    .name(new Name(resourceTypeName))
+                                    .location(new JMXNodeLocation(objectName))
+                                    .resourceNameTemplate(getString(resourceTypeValueNode, context,
+                                            JMXResourceTypeAttributes.RESOURCE_NAME_TEMPLATE))
+                                    .parents(getNameListFromString(resourceTypeValueNode, context,
+                                            JMXResourceTypeAttributes.PARENTS));
 
                             List<Name> metricSets = getNameListFromString(resourceTypeValueNode, context,
                                     JMXResourceTypeAttributes.METRIC_SETS);
@@ -1002,7 +1175,10 @@ public class MonitorServiceConfigurationBuilder {
                                             new JMXNodeLocation(getObjectName(operationValueNode, context,
                                                     JMXOperationAttributes.OBJECT_NAME)),
                                             getString(operationValueNode, context,
-                                                    JMXOperationAttributes.OPERATION_NAME));
+                                                    JMXOperationAttributes.INTERNAL_NAME),
+                                            getBoolean(operationValueNode, context,
+                                                    JMXOperationAttributes.MODIFIES),
+                                            null);
                                     resourceTypeBuilder.operation(op);
                                 }
                             }
@@ -1020,11 +1196,10 @@ public class MonitorServiceConfigurationBuilder {
                                             JMXResourceConfigAttributes.OBJECT_NAME);
                                     String attr = getString(configValueNode, context,
                                             JMXResourceConfigAttributes.ATTRIBUTE);
-                                    AttributeLocation<JMXNodeLocation> attribLoc =
-                                            new AttributeLocation<JMXNodeLocation>(new JMXNodeLocation(on), attr);
-                                    ResourceConfigurationPropertyType<JMXNodeLocation> configType =
-                                            new ResourceConfigurationPropertyType<>(
-                                                    ID.NULL_ID, new Name(configName), attribLoc);
+                                    AttributeLocation<JMXNodeLocation> attribLoc = new AttributeLocation<JMXNodeLocation>(
+                                            new JMXNodeLocation(on), attr);
+                                    ResourceConfigurationPropertyType<JMXNodeLocation> configType = new ResourceConfigurationPropertyType<>(
+                                            ID.NULL_ID, new Name(configName), attribLoc);
                                     resourceTypeBuilder.resourceConfigurationPropertyType(configType);
 
                                 }
@@ -1077,6 +1252,7 @@ public class MonitorServiceConfigurationBuilder {
                             RemoteDMRAttributes.SET_AVAIL_ON_SHUTDOWN);
                     Avail setAvailOnShutdown = (setAvailOnShutdownStr == null) ? null
                             : Avail.valueOf(setAvailOnShutdownStr);
+                    String protocol = getString(remoteDMRValueNode, context, RemoteDMRAttributes.PROTOCOL);
                     String host = getString(remoteDMRValueNode, context, RemoteDMRAttributes.HOST);
                     int port = getInt(remoteDMRValueNode, context, RemoteDMRAttributes.PORT);
                     String username = getString(remoteDMRValueNode, context, RemoteDMRAttributes.USERNAME);
@@ -1085,15 +1261,23 @@ public class MonitorServiceConfigurationBuilder {
                     String securityRealm = getString(remoteDMRValueNode, context, RemoteDMRAttributes.SECURITY_REALM);
                     List<Name> resourceTypeSets = getNameListFromString(remoteDMRValueNode, context,
                             RemoteDMRAttributes.RESOURCE_TYPE_SETS);
+                    String tenantId = getString(remoteDMRValueNode, context, RemoteDMRAttributes.TENANT_ID);
+                    String metricIdTemplate = getString(remoteDMRValueNode, context,
+                            RemoteDMRAttributes.METRIC_ID_TEMPLATE);
+                    Map<String, String> metricTags = getMapFromString(remoteDMRValueNode, context,
+                            RemoteDMRAttributes.METRIC_TAGS);
 
                     if (useSsl && securityRealm == null) {
-                        throw new OperationFailedException("If using SSL, you must define a security realm: " + name);
+                        log.debugf("Using SSL with no security realm - will rely on the JVM truststore: " + name);
                     }
 
-                    String protocol = useSsl ? "https-remoting" : "http-remoting";
+                    if (protocol == null) {
+                        protocol = useSsl ? "https-remoting" : "http-remoting";
+                    }
                     ConnectionData connectionData = new ConnectionData(protocol, host, port, username, password);
                     EndpointConfiguration endpoint = new EndpointConfiguration(name, enabled, resourceTypeSets,
-                            connectionData, securityRealm, setAvailOnShutdown);
+                            connectionData, securityRealm, setAvailOnShutdown, tenantId, metricIdTemplate, metricTags,
+                            null);
 
                     dmrConfigBuilder.endpoint(endpoint);
                 }
@@ -1116,9 +1300,13 @@ public class MonitorServiceConfigurationBuilder {
                         : Avail.valueOf(setAvailOnShutdownStr);
                 List<Name> resourceTypeSets = getNameListFromString(localDMRValueNode, context,
                         LocalDMRAttributes.RESOURCE_TYPE_SETS);
+                String tenantId = getString(localDMRValueNode, context, LocalDMRAttributes.TENANT_ID);
+                String metricIdTemplate = getString(localDMRValueNode, context, LocalDMRAttributes.METRIC_ID_TEMPLATE);
+                Map<String, String> metricTags = getMapFromString(localDMRValueNode, context,
+                        LocalDMRAttributes.METRIC_TAGS);
 
                 EndpointConfiguration endpoint = new EndpointConfiguration(name, enabled, resourceTypeSets, null, null,
-                        setAvailOnShutdown);
+                        setAvailOnShutdown, tenantId, metricIdTemplate, metricTags, null);
                 dmrConfigBuilder.endpoint(endpoint);
             }
 
@@ -1141,6 +1329,11 @@ public class MonitorServiceConfigurationBuilder {
                     String securityRealm = getString(remoteJMXValueNode, context, RemoteJMXAttributes.SECURITY_REALM);
                     List<Name> resourceTypeSets = getNameListFromString(remoteJMXValueNode, context,
                             RemoteJMXAttributes.RESOURCE_TYPE_SETS);
+                    String tenantId = getString(remoteJMXValueNode, context, RemoteJMXAttributes.TENANT_ID);
+                    String metricIdTemplate = getString(remoteJMXValueNode, context,
+                            RemoteDMRAttributes.METRIC_ID_TEMPLATE);
+                    Map<String, String> metricTags = getMapFromString(remoteJMXValueNode, context,
+                            RemoteDMRAttributes.METRIC_TAGS);
 
                     // make sure the URL is at least syntactically valid
                     URI url;
@@ -1151,60 +1344,46 @@ public class MonitorServiceConfigurationBuilder {
                     }
 
                     if (url.getScheme().equalsIgnoreCase("https") && securityRealm == null) {
-                        throw new OperationFailedException("If using SSL, you must define a security realm: " + name);
+                        log.debugf("Using SSL with no security realm - will rely on the JVM truststore: " + name);
                     }
 
                     ConnectionData connectionData = new ConnectionData(url, username, password);
                     EndpointConfiguration endpoint = new EndpointConfiguration(name, enabled, resourceTypeSets,
-                            connectionData, securityRealm, setAvailOnShutdown);
+                            connectionData, securityRealm, setAvailOnShutdown, tenantId, metricIdTemplate, metricTags,
+                            null);
 
                     jmxConfigBuilder.endpoint(endpoint);
                 }
             }
 
-            // PROMETHEUS
-
-            if (managedServersValueNode.hasDefined(RemotePrometheusDefinition.REMOTE_PROMETHEUS)) {
-                List<Property> remotePromsList = managedServersValueNode
-                        .get(RemotePrometheusDefinition.REMOTE_PROMETHEUS)
+            if (managedServersValueNode.hasDefined(LocalJMXDefinition.LOCAL_JMX)) {
+                List<Property> localJMXsList = managedServersValueNode.get(LocalJMXDefinition.LOCAL_JMX)
                         .asPropertyList();
-                for (Property remotePromProperty : remotePromsList) {
-                    String name = remotePromProperty.getName();
-                    ModelNode remotePromValueNode = remotePromProperty.getValue();
-                    boolean enabled = getBoolean(remotePromValueNode, context, RemotePrometheusAttributes.ENABLED);
-                    String urlStr = getString(remotePromValueNode, context, RemotePrometheusAttributes.URL);
-                    String username = getString(remotePromValueNode, context, RemotePrometheusAttributes.USERNAME);
-                    String password = getString(remotePromValueNode, context, RemotePrometheusAttributes.PASSWORD);
-                    String securityRealm = getString(remotePromValueNode, context,
-                            RemotePrometheusAttributes.SECURITY_REALM);
-                    Map<String, String> labels = getMapFromString(remotePromValueNode, context,
-                            RemotePrometheusAttributes.LABELS);
-                    List<Name> metricSets = getNameListFromString(remotePromValueNode, context,
-                            RemotePrometheusAttributes.METRIC_SETS);
-                    int interval = getInt(remotePromValueNode, context, RemotePrometheusAttributes.INTERVAL);
-                    String timeUnitsStr = getString(remotePromValueNode, context,
-                            RemotePrometheusAttributes.TIME_UNITS);
-                    TimeUnit timeUnits = TimeUnit.valueOf(timeUnitsStr.toUpperCase());
+                for (Property localJMXProperty : localJMXsList) {
+                    String name = localJMXProperty.getName();
+                    ModelNode localJMXValueNode = localJMXProperty.getValue();
+                    boolean enabled = getBoolean(localJMXValueNode, context, LocalJMXAttributes.ENABLED);
+                    String setAvailOnShutdownStr = getString(localJMXValueNode, context,
+                            LocalJMXAttributes.SET_AVAIL_ON_SHUTDOWN);
+                    Avail setAvailOnShutdown = (setAvailOnShutdownStr == null) ? null
+                            : Avail.valueOf(setAvailOnShutdownStr);
+                    String mbsNameStr = getString(localJMXValueNode, context, LocalJMXAttributes.MBEAN_SERVER_NAME);
+                    List<Name> resourceTypeSets = getNameListFromString(localJMXValueNode, context,
+                            LocalJMXAttributes.RESOURCE_TYPE_SETS);
+                    String tenantId = getString(localJMXValueNode, context, LocalJMXAttributes.TENANT_ID);
+                    String metricIdTemplate = getString(localJMXValueNode, context,
+                            RemoteDMRAttributes.METRIC_ID_TEMPLATE);
+                    Map<String, String> metricTags = getMapFromString(localJMXValueNode, context,
+                            RemoteDMRAttributes.METRIC_TAGS);
 
-                    // make sure the URL is at least syntactically valid
-                    URI url;
-                    try {
-                        url = new URI(urlStr);
-                    } catch (Exception e) {
-                        throw new OperationFailedException("Invalid remote Prometheus URL: " + urlStr, e);
-                    }
+                    EndpointConfiguration endpoint = new EndpointConfiguration(name, enabled, resourceTypeSets,
+                            null, null, setAvailOnShutdown, tenantId, metricIdTemplate, metricTags,
+                            Collections.singletonMap(JMXEndpointService.MBEAN_SERVER_NAME_KEY, mbsNameStr));
 
-                    if (url.getScheme().equalsIgnoreCase("https") && securityRealm == null) {
-                        throw new OperationFailedException("If using SSL, you must define a security realm: " + name);
-                    }
-
-                    ConnectionData connectionData = new ConnectionData(url, username, password);
-                    DynamicEndpointConfiguration endpoint = new DynamicEndpointConfiguration(name, enabled, labels,
-                            metricSets, connectionData, securityRealm, interval, timeUnits);
-
-                    prometheusConfigBuilder.endpoint(endpoint);
+                    jmxConfigBuilder.endpoint(endpoint);
                 }
             }
+
         }
     }
 
@@ -1228,7 +1407,7 @@ public class MonitorServiceConfigurationBuilder {
         } else if ("/".equals(path)) {
             return PathAddress.EMPTY_ADDRESS;
         } else {
-            return PathAddress.parseCLIStyleAddress(path);
+            return WildflyCompatibilityUtils.parseCLIStyleAddress(path);
         }
     }
 
@@ -1240,7 +1419,7 @@ public class MonitorServiceConfigurationBuilder {
 
     private static String getObjectName(ModelNode modelNode, OperationContext context,
             SimpleAttributeDefinition attrib)
-                    throws OperationFailedException {
+            throws OperationFailedException {
         String value = getString(modelNode, context, attrib);
         if (value != null && !value.isEmpty()) {
             // just make sure it follows valid object name syntax rules
@@ -1268,6 +1447,31 @@ public class MonitorServiceConfigurationBuilder {
         } else {
             return Collections.emptyList();
         }
+    }
+
+    private static List<OperationParam> getOpParamListFromOpNode(ModelNode modelNode, OperationContext context)
+            throws OperationFailedException {
+
+        List<OperationParam> ret = new ArrayList<>();
+
+        ModelNode params = modelNode.get(DMROperationParamDefinition.PARAM);
+        if (params == null || !params.isDefined()) {
+            return Collections.emptyList();
+        }
+
+        List<Property> propList = params.asPropertyList();
+        for (Property prop : propList) {
+            String paramName = prop.getName();
+            ModelNode paramModelNode = prop.getValue();
+            String paramType = getString(paramModelNode, context, DMROperationParamAttributes.TYPE);
+            String paramDesc = getString(paramModelNode, context, DMROperationParamAttributes.DESCRIPTION);
+            String paramDefaultValue = getString(paramModelNode, context, DMROperationParamAttributes.DEFAULT_VALUE);
+            Boolean paramRequired = getBoolean(paramModelNode, context, DMROperationParamAttributes.REQUIRED);
+            OperationParam operationParam = new OperationParam(paramName, paramType, paramDesc, paramDefaultValue,
+                    paramRequired);
+            ret.add(operationParam);
+        }
+        return ret;
     }
 
     private static Map<String, String> getMapFromString(ModelNode modelNode, OperationContext context,

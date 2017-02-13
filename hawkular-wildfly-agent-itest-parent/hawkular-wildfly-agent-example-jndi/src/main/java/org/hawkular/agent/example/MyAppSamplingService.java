@@ -19,12 +19,14 @@ package org.hawkular.agent.example;
 import java.net.URI;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Map;
 
 import org.hawkular.agent.monitor.api.SamplingService;
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.EndpointConfiguration;
 import org.hawkular.agent.monitor.inventory.AvailType;
 import org.hawkular.agent.monitor.inventory.ConnectionData;
 import org.hawkular.agent.monitor.inventory.MeasurementInstance;
+import org.hawkular.agent.monitor.inventory.MeasurementType;
 import org.hawkular.agent.monitor.inventory.MetricType;
 import org.hawkular.agent.monitor.inventory.MonitoredEndpoint;
 import org.hawkular.agent.monitor.storage.AvailDataPoint;
@@ -39,14 +41,14 @@ import org.jboss.logging.Logger;
 public class MyAppSamplingService implements SamplingService<MyAppNodeLocation> {
     private static final Logger log = Logger.getLogger(MyAppSamplingService.class);
 
-    private final MonitoredEndpoint endpoint;
+    private final MonitoredEndpoint<EndpointConfiguration> endpoint;
 
     public MyAppSamplingService() {
         try {
             // this is our endpoint that Hawkular uses to collect metrics and availabilities for our managed resources
             ConnectionData connectionData = new ConnectionData(new URI("myapp:local-uri"), null, null);
             EndpointConfiguration config = new EndpointConfiguration("My App Endpoint", true, Collections.emptyList(),
-                    connectionData, null, null);
+                    connectionData, null, null, HawkularWildFlyAgentProvider.TENANT_ID, null, null, null);
             this.endpoint = MonitoredEndpoint.of(config, null);
         } catch (Exception e) {
             throw new IllegalStateException("Cannot create sampling service", e);
@@ -54,7 +56,13 @@ public class MyAppSamplingService implements SamplingService<MyAppNodeLocation> 
     }
 
     @Override
-    public MonitoredEndpoint getMonitoredEndpoint() {
+    public Map<String, String> generateAssociatedMetricTags(
+            MeasurementInstance<MyAppNodeLocation, ? extends MeasurementType<MyAppNodeLocation>> instance) {
+        return Collections.emptyMap();
+    }
+
+    @Override
+    public MonitoredEndpoint<EndpointConfiguration> getMonitoredEndpoint() {
         return this.endpoint;
     }
 
@@ -73,5 +81,4 @@ public class MyAppSamplingService implements SamplingService<MyAppNodeLocation> 
         // TODO collect availabilities
         log.warnf("Need to check availabilities for these: %s", instances);
     }
-
 }

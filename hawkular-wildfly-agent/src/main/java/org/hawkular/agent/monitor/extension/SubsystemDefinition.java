@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,7 +34,7 @@ import org.jboss.as.controller.registry.OperationEntry.Flag;
 import org.jboss.dmr.ModelNode;
 import org.jboss.dmr.ModelType;
 
-public class SubsystemDefinition extends PersistentResourceDefinition {
+public class SubsystemDefinition extends MonitorPersistentResourceDefinition {
 
     public static final SubsystemDefinition INSTANCE = new SubsystemDefinition();
 
@@ -42,26 +42,30 @@ public class SubsystemDefinition extends PersistentResourceDefinition {
 
     static final SimpleAttributeDefinition OPPARAM_RESTART = new SimpleAttributeDefinitionBuilder(
             "restart", ModelType.BOOLEAN)
-            .setAllowExpression(true)
-            .setDefaultValue(new ModelNode(false))
-            .build();
+                    .setAllowExpression(true)
+                    .setDefaultValue(new ModelNode(false))
+                    .build();
 
     static final SimpleOperationDefinition OP_START = new SimpleOperationDefinitionBuilder(
             "start", SubsystemExtension.getResourceDescriptionResolver())
-            .addParameter(OPPARAM_RESTART)
-            .build();
+                    .addParameter(OPPARAM_RESTART)
+                    .build();
 
     static final SimpleOperationDefinition OP_STOP = new SimpleOperationDefinitionBuilder(
             "stop", SubsystemExtension.getResourceDescriptionResolver())
-            .build();
+                    .build();
 
     static final SimpleOperationDefinition OP_STATUS = new SimpleOperationDefinitionBuilder(
             "status", SubsystemExtension.getResourceDescriptionResolver())
-            .build();
+                    .build();
 
     static final SimpleOperationDefinition OP_FULL_DISCOVERY_SCAN = new SimpleOperationDefinitionBuilder(
             "fullDiscoveryScan", SubsystemExtension.getResourceDescriptionResolver())
-            .build();
+                    .build();
+
+    static final SimpleOperationDefinition OP_INVENTORY_REPORT = new SimpleOperationDefinitionBuilder(
+            "inventoryReport", SubsystemExtension.getResourceDescriptionResolver())
+                    .build();
 
     private SubsystemDefinition() {
         super(PathElement.pathElement(SUBSYSTEM, SubsystemExtension.SUBSYSTEM_NAME),
@@ -89,8 +93,7 @@ public class SubsystemDefinition extends PersistentResourceDefinition {
                 DMRAvailSetDefinition.INSTANCE,
                 JMXResourceTypeSetDefinition.INSTANCE,
                 JMXMetricSetDefinition.INSTANCE,
-                JMXAvailSetDefinition.INSTANCE,
-                PrometheusMetricSetDefinition.INSTANCE);
+                JMXAvailSetDefinition.INSTANCE);
     }
 
     @Override
@@ -101,6 +104,7 @@ public class SubsystemDefinition extends PersistentResourceDefinition {
         rr.registerOperationHandler(OP_STOP, new OperationSubsystemStop());
         rr.registerOperationHandler(OP_STATUS, new OperationSubsystemStatus());
         rr.registerOperationHandler(OP_FULL_DISCOVERY_SCAN, new OperationFullDiscoveryScan());
+        rr.registerOperationHandler(OP_INVENTORY_REPORT, new OperationInventoryReport());
     }
 
 }

@@ -21,21 +21,20 @@
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:xalan="http://xml.apache.org/xalan" version="2.0" exclude-result-prefixes="xalan">
 
   <xsl:output method="xml" version="1.0" encoding="UTF-8" indent="yes" xalan:indent-amount="4" standalone="no" />
-  <xsl:strip-space elements="*" />
 
   <!-- Add hawkular-wildfly-agent.xml after the last available <subsystem> -->
   <xsl:template match="/*[local-name()='config']/*[local-name()='subsystems']/*[local-name()='subsystem'][last()]">
     <xsl:copy>
-      <xsl:apply-templates select="node()|@*" />
+      <xsl:apply-templates select="node()|comment()|@*" />
     </xsl:copy>
     <xsl:comment> Required by Hawkular WildFly Agent: </xsl:comment>
     <subsystem>hawkular-wildfly-agent.xml</subsystem>
   </xsl:template>
 
   <!-- copy everything else as-is -->
-  <xsl:template match="node()|@*">
+  <xsl:template match="node()|comment()|@*">
     <xsl:copy>
-      <xsl:apply-templates select="node()|@*" />
+      <xsl:apply-templates select="node()|comment()|@*" />
     </xsl:copy>
   </xsl:template>
 

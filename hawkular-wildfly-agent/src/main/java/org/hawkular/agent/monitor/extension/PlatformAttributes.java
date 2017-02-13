@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,9 +16,12 @@
  */
 package org.hawkular.agent.monitor.extension;
 
+import java.util.concurrent.TimeUnit;
+
 import org.jboss.as.controller.AttributeDefinition;
 import org.jboss.as.controller.SimpleAttributeDefinition;
 import org.jboss.as.controller.SimpleAttributeDefinitionBuilder;
+import org.jboss.as.controller.operations.validation.TimeUnitValidator;
 import org.jboss.as.controller.registry.AttributeAccess;
 import org.jboss.dmr.ModelNode;
 import org.jboss.dmr.ModelType;
@@ -27,13 +30,41 @@ public interface PlatformAttributes {
 
     SimpleAttributeDefinition ENABLED = new SimpleAttributeDefinitionBuilder("enabled",
             ModelType.BOOLEAN)
-            .setAllowNull(true)
-            .setDefaultValue(new ModelNode(true))
-            .setAllowExpression(true)
-            .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-            .build();
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(true))
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_NONE)
+                    .build();
+
+    SimpleAttributeDefinition MACHINE_ID = new SimpleAttributeDefinitionBuilder("machine-id",
+            ModelType.STRING)
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
+    SimpleAttributeDefinition INTERVAL = new SimpleAttributeDefinitionBuilder("interval",
+            ModelType.INT)
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(5))
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
+    SimpleAttributeDefinition TIME_UNITS = new SimpleAttributeDefinitionBuilder("time-units",
+            ModelType.STRING)
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(TimeUnit.MINUTES.name()))
+                    .setAllowExpression(true)
+                    .setValidator(new TimeUnitValidator(true, true, TimeUnit.MILLISECONDS, TimeUnit.SECONDS,
+                            TimeUnit.MINUTES))
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
 
     AttributeDefinition[] ATTRIBUTES = {
-            ENABLED
+            ENABLED,
+            MACHINE_ID,
+            INTERVAL,
+            TIME_UNITS
     };
 }

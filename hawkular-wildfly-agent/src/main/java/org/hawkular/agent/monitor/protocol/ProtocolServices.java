@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,7 +50,7 @@ import org.jboss.msc.value.InjectedValue;
 
 /**
  * This object contains all the {@link ProtocolService}s and their inventories (that is, all the managed
- * DMR endpoints, managed JMX endpoints, etc).
+ * DMR endpoints, platform endpoint, etc).
  *
  * This object will also periodically trigger auto-discovery scans on all managed endpoints to help
  * keep the inventory up-to-date.
@@ -59,7 +59,7 @@ import org.jboss.msc.value.InjectedValue;
  * @author John Mazzitelli
  */
 public class ProtocolServices {
-    public static final int DEFAULT_AUTO_DISCOVERY_SCAN_PERIOD_SECS = 3600;
+    public static final int DEFAULT_AUTO_DISCOVERY_SCAN_PERIOD_SECS = 600;
 
     public static class Builder {
         private final String feedId;
@@ -88,10 +88,10 @@ public class ProtocolServices {
         }
 
         public Builder dmrProtocolService(
-                ModelControllerClientFactory localModelControllerClientFactory,
+                ModelControllerClientFactory localModelControllerClientFactory, // may be null; only needed for local
                 ProtocolConfiguration<DMRNodeLocation> protocolConfig) {
 
-            ProtocolService.Builder<DMRNodeLocation, DMRSession> builder = ProtocolService.builder();
+            ProtocolService.Builder<DMRNodeLocation, DMRSession> builder = ProtocolService.builder("DMR");
 
             for (EndpointConfiguration server : protocolConfig.getEndpoints().values()) {
                 if (!server.isEnabled()) {
@@ -133,7 +133,7 @@ public class ProtocolServices {
 
         public Builder jmxProtocolService(ProtocolConfiguration<JMXNodeLocation> protocolConfig) {
 
-            ProtocolService.Builder<JMXNodeLocation, JMXSession> builder = ProtocolService.builder();
+            ProtocolService.Builder<JMXNodeLocation, JMXSession> builder = ProtocolService.builder("JMX");
 
             for (EndpointConfiguration server : protocolConfig.getEndpoints().values()) {
                 if (server.isEnabled()) {
@@ -163,11 +163,10 @@ public class ProtocolServices {
             return this;
         }
 
-        public Builder platformProtocolService(
-                ProtocolConfiguration<PlatformNodeLocation> protocolConfig) {
+        public Builder platformProtocolService(ProtocolConfiguration<PlatformNodeLocation> protocolConfig) {
 
             ProtocolService.Builder<PlatformNodeLocation, PlatformSession> builder = ProtocolService
-                    .builder();
+                    .builder("Platform");
 
             for (EndpointConfiguration server : protocolConfig.getEndpoints().values()) {
                 if (server.isEnabled()) {
@@ -225,17 +224,6 @@ public class ProtocolServices {
         this.services = Collections.unmodifiableList(Arrays.asList(dmrProtocolService, jmxProtocolService,
                 platformProtocolService));
         this.autoDiscoveryScanPeriodSecs = autoDiscoveryScanPeriodSecs;
-    }
-
-    @SuppressWarnings("unchecked")
-    public <L, S extends Session<L>> EndpointService<L, S> getEndpointService(String endpointName) {
-        for (ProtocolService<?, ?> service : services) {
-            EndpointService<?, ?> result = service.getEndpointServices().get(endpointName);
-            if (result != null) {
-                return (EndpointService<L, S>) result;
-            }
-        }
-        return null;
     }
 
     public void start() {

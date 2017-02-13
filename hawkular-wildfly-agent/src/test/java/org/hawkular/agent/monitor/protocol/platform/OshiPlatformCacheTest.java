@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,14 +21,14 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.hawkular.agent.monitor.inventory.Name;
+import org.hawkular.agent.monitor.inventory.ID;
 import org.hawkular.agent.monitor.protocol.platform.Constants.PlatformResourceType;
 import org.junit.Assert;
 import org.junit.Test;
 
-import oshi.hardware.Memory;
+import oshi.hardware.CentralProcessor;
+import oshi.hardware.GlobalMemory;
 import oshi.hardware.PowerSource;
-import oshi.hardware.Processor;
 import oshi.software.os.OSFileStore;
 import oshi.software.os.OperatingSystem;
 import oshi.software.os.OperatingSystemVersion;
@@ -56,51 +56,37 @@ public class OshiPlatformCacheTest {
         final CountDownLatch doneLatch1 = new CountDownLatch(1);
         final CountDownLatch doneLatch2 = new CountDownLatch(1);
 
-        Thread t1 = new Thread(new Runnable() {
-            public void run() {
-                try {
-                    // should never take this long, but just a precaution
-                    goLatch.await(10, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    print("thread 1 interrupted");
-                    return;
-                }
-
-                for (int i = 0; i < maxLoops; i++) {
-                    oshi.getOperatingSystem();
-                    oshi.getFileStores();
-                    oshi.getMemory();
-                    oshi.getProcessors();
-                    oshi.getPowerSources();
-                    oshi.refresh();
-                    t1Attempts.incrementAndGet();
-                }
-
-                doneLatch1.countDown();
+        Thread t1 = new Thread(() -> {
+            try {
+                // should never take this long, but just a precaution
+                goLatch.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                print("thread 1 interrupted");
+                return;
             }
+
+            for (int i = 0; i < maxLoops; i++) {
+                getOshiData(oshi);
+                t1Attempts.incrementAndGet();
+            }
+
+            doneLatch1.countDown();
         });
 
-        Thread t2 = new Thread(new Runnable() {
-            public void run() {
-                try {
-                    // should never take this long, but just a precaution
-                    goLatch.await(10, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    print("thread 2 interrupted");
-                    return;
-                }
-                for (int i = 0; i < maxLoops; i++) {
-                    oshi.getOperatingSystem();
-                    oshi.getFileStores();
-                    oshi.getMemory();
-                    oshi.getProcessors();
-                    oshi.getPowerSources();
-                    oshi.refresh();
-                    t2Attempts.incrementAndGet();
-                }
-
-                doneLatch2.countDown();
+        Thread t2 = new Thread(() -> {
+            try {
+                // should never take this long, but just a precaution
+                goLatch.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                print("thread 2 interrupted");
+                return;
             }
+            for (int i = 0; i < maxLoops; i++) {
+                getOshiData(oshi);
+                t2Attempts.incrementAndGet();
+            }
+
+            doneLatch2.countDown();
         });
 
         t1.start();
@@ -118,6 +104,15 @@ public class OshiPlatformCacheTest {
         Assert.assertEquals(maxLoops, t2Attempts.get());
     }
 
+    private void getOshiData(OshiPlatformCache oshi) {
+        oshi.getOperatingSystem();
+        oshi.getFileStores();
+        oshi.getMemory();
+        oshi.getProcessor();
+        oshi.getPowerSources();
+        oshi.refresh();
+    }
+
     @Test
     public void testDiscover() {
         OshiPlatformCache oshi = newOshiPlatformCache();
@@ -127,7 +122,7 @@ public class OshiPlatformCacheTest {
         // OS
         query = PlatformPath.builder().any(PlatformResourceType.OPERATING_SYSTEM).build();
         map = oshi.discoverResources(query);
-        Assert.assertEquals("Should only have 1 operating system resource", map.size(), 1);
+        Assert.assertEquals("Should only have 1 operating system resource", 1, map.size());
         PlatformPath osPath = map.keySet().iterator().next();
         PlatformResourceNode osNode = map.values().iterator().next();
         print("---> OS path=[%s], node=[%s]", osPath, osNode);
@@ -136,22 +131,24 @@ public class OshiPlatformCacheTest {
         // find the OS using a non-wildcard, explicit query path
         query = PlatformPath.builder().segment(PlatformResourceType.OPERATING_SYSTEM, osNode.getId()).build();
         map = oshi.discoverResources(query);
-        Assert.assertEquals("Should only have 1 operating system resource", map.size(), 1);
+        Assert.assertEquals("Should only have 1 operating system resource", 1, map.size());
 
         // Memory
         query = PlatformPath.builder().segments(osPath).any(PlatformResourceType.MEMORY).build();
         map = oshi.discoverResources(query);
-        Assert.assertEquals("Should only have 1 memory resource", map.size(), 1);
+        Assert.assertEquals("Should only have 1 memory resource", 1, map.size());
         PlatformPath memPath = map.keySet().iterator().next();
         PlatformResourceNode memNode = map.values().iterator().next();
         print("---> Memory path=[%s], node=[%s]", memPath, memNode);
         Assert.assertEquals(PlatformResourceType.MEMORY, memNode.getType());
 
-        // find the Memory using a non-wildcard, explicit query path
+        // find the Memory using a non-wildcard, explicit query path (there is only one - resource with ID "Memory")
         query = PlatformPath.builder()
-                .segment(PlatformResourceType.MEMORY, PlatformResourceType.MEMORY.getName().getNameString()).build();
+                .segment(PlatformResourceType.MEMORY,
+                        PlatformResourceType.MEMORY.getResourceTypeName().getNameString())
+                .build();
         map = oshi.discoverResources(query);
-        Assert.assertEquals("Should only have 1 memory resource", map.size(), 1);
+        Assert.assertEquals("Should only have 1 memory resource", 1, map.size());
 
         // File Stores
         query = PlatformPath.builder().segments(osPath).any(PlatformResourceType.FILE_STORE).build();
@@ -166,7 +163,7 @@ public class OshiPlatformCacheTest {
             // find it using a non-wildcard, explicit query path
             query = PlatformPath.builder().segment(PlatformResourceType.FILE_STORE, node.getId()).build();
             Map<PlatformPath, PlatformResourceNode> singletonMap = oshi.discoverResources(query);
-            Assert.assertEquals("Should only have returned 1", singletonMap.size(), 1);
+            Assert.assertEquals("Should only have returned 1", 1, singletonMap.size());
         }
 
         // Processors
@@ -182,7 +179,7 @@ public class OshiPlatformCacheTest {
             // find it using a non-wildcard, explicit query path
             query = PlatformPath.builder().segment(PlatformResourceType.PROCESSOR, node.getId()).build();
             Map<PlatformPath, PlatformResourceNode> singletonMap = oshi.discoverResources(query);
-            Assert.assertEquals("Should only have returned 1", singletonMap.size(), 1);
+            Assert.assertEquals("Should only have returned 1", 1, singletonMap.size());
         }
 
         // Power Sources
@@ -198,7 +195,7 @@ public class OshiPlatformCacheTest {
             // find it using a non-wildcard, explicit query path
             query = PlatformPath.builder().segment(PlatformResourceType.POWER_SOURCE, node.getId()).build();
             Map<PlatformPath, PlatformResourceNode> singletonMap = oshi.discoverResources(query);
-            Assert.assertEquals("Should only have returned 1", singletonMap.size(), 1);
+            Assert.assertEquals("Should only have returned 1", 1, singletonMap.size());
         }
     }
 
@@ -207,14 +204,26 @@ public class OshiPlatformCacheTest {
         Double val;
         OshiPlatformCache oshi = newOshiPlatformCache();
 
-        // Memory
-        for (Name metricName : PlatformResourceType.MEMORY.getMetricNames()) {
-            val = oshi.getMemoryMetric(metricName);
-            print("Memory metric [%s]=[%s]", metricName, val);
+        // Operating System
+        for (ID metricId : PlatformResourceType.OPERATING_SYSTEM.getMetricTypeIds()) {
+            val = oshi.getOperatingSystemMetric(metricId);
+            print("OS metric [%s]=[%s]", metricId, val);
             Assert.assertNotNull(val);
         }
         try {
-            oshi.getMemoryMetric(new Name("invalidMetricName"));
+            oshi.getOperatingSystemMetric(new ID("invalidMetricName"));
+            Assert.fail("Exception should have been thrown on bad OS metric name");
+        } catch (Exception ok) {
+        }
+
+        // Memory
+        for (ID metricId : PlatformResourceType.MEMORY.getMetricTypeIds()) {
+            val = oshi.getMemoryMetric(metricId);
+            print("Memory metric [%s]=[%s]", metricId, val);
+            Assert.assertNotNull(val);
+        }
+        try {
+            oshi.getMemoryMetric(new ID("invalidMetricName"));
             Assert.fail("Exception should have been thrown on bad memory metric name");
         } catch (Exception ok) {
         }
@@ -222,28 +231,28 @@ public class OshiPlatformCacheTest {
         // File Stores
         Map<String, OSFileStore> fileStores = oshi.getFileStores();
         for (OSFileStore fs : fileStores.values()) {
-            for (Name metricName : PlatformResourceType.FILE_STORE.getMetricNames()) {
-                val = oshi.getFileStoreMetric(fs.getName(), metricName);
-                print("FileStore [%s] metric [%s]=[%s]", fs.getName(), metricName, val);
+            for (ID metricId : PlatformResourceType.FILE_STORE.getMetricTypeIds()) {
+                val = oshi.getFileStoreMetric(fs.getName(), metricId);
+                print("FileStore [%s] metric [%s]=[%s]", fs.getName(), metricId, val);
                 Assert.assertNotNull(val);
             }
             try {
-                oshi.getFileStoreMetric(fs.getName(), new Name("invalidMetricName"));
+                oshi.getFileStoreMetric(fs.getName(), new ID("invalidMetricName"));
                 Assert.fail("Exception should have been thrown on bad filestore metric name");
             } catch (Exception ok) {
             }
         }
 
         // Processors
-        Map<String, Processor> processors = oshi.getProcessors();
-        for (Processor p : processors.values()) {
-            for (Name metricName : PlatformResourceType.PROCESSOR.getMetricNames()) {
-                val = oshi.getProcessorMetric("" + p.getProcessorNumber(), metricName);
-                print("Processor [%s] metric [%s]=[%s]", "" + p.getProcessorNumber(), metricName, val);
+        CentralProcessor processor = oshi.getProcessor();
+        for (int i = 0; i < processor.getLogicalProcessorCount(); i++) {
+            for (ID metricId : PlatformResourceType.PROCESSOR.getMetricTypeIds()) {
+                val = oshi.getProcessorMetric("" + i, metricId);
+                print("Processor [%s] metric [%s]=[%s]", "" + i, metricId, val);
                 Assert.assertNotNull(val);
             }
             try {
-                oshi.getProcessorMetric("" + p.getProcessorNumber(), new Name("invalidMetricName"));
+                oshi.getProcessorMetric("" + i, new ID("invalidMetricName"));
                 Assert.fail("Exception should have been thrown on bad processor metric name");
             } catch (Exception ok) {
             }
@@ -252,22 +261,22 @@ public class OshiPlatformCacheTest {
         // Power Sources
         Map<String, PowerSource> powersources = oshi.getPowerSources();
         for (PowerSource p : powersources.values()) {
-            for (Name metricName : PlatformResourceType.POWER_SOURCE.getMetricNames()) {
-                val = oshi.getPowerSourceMetric(p.getName(), metricName);
-                print("PowerSource [%s] metric [%s]=[%s]", "" + p.getName(), metricName, val);
+            for (ID metricId : PlatformResourceType.POWER_SOURCE.getMetricTypeIds()) {
+                val = oshi.getPowerSourceMetric(p.getName(), metricId);
+                print("PowerSource [%s] metric [%s]=[%s]", "" + p.getName(), metricId, val);
                 Assert.assertNotNull(val);
             }
             try {
-                oshi.getPowerSourceMetric(p.getName(), new Name("invalidMetricName"));
+                oshi.getPowerSourceMetric(p.getName(), new ID("invalidMetricName"));
                 Assert.fail("Exception should have been thrown on bad powersource metric name");
             } catch (Exception ok) {
             }
         }
 
         // some more negative testing
-        Assert.assertNull(oshi.getFileStoreMetric("invalidName", new Name("invalidMetricName")));
-        Assert.assertNull(oshi.getProcessorMetric("invalidName", new Name("invalidMetricName")));
-        Assert.assertNull(oshi.getPowerSourceMetric("invalidName", new Name("invalidMetricName")));
+        Assert.assertNull(oshi.getFileStoreMetric("invalidName", new ID("invalidMetricName")));
+        Assert.assertNull(oshi.getProcessorMetric("invalidName", new ID("invalidMetricName")));
+        Assert.assertNull(oshi.getPowerSourceMetric("invalidName", new ID("invalidMetricName")));
     }
 
     @Test
@@ -276,14 +285,14 @@ public class OshiPlatformCacheTest {
         Object os1 = oshi.getOperatingSystem();
         Object mem1 = oshi.getMemory();
         Object fs1 = oshi.getFileStores();
-        Object proc1 = oshi.getProcessors();
+        Object proc1 = oshi.getProcessor();
         Object ps1 = oshi.getPowerSources();
 
         // see that they are cached - same objects as before
         Object os2 = oshi.getOperatingSystem();
         Object mem2 = oshi.getMemory();
         Object fs2 = oshi.getFileStores();
-        Object proc2 = oshi.getProcessors();
+        Object proc2 = oshi.getProcessor();
         Object ps2 = oshi.getPowerSources();
         Assert.assertSame(os1, os2);
         Assert.assertSame(mem1, mem2);
@@ -296,7 +305,7 @@ public class OshiPlatformCacheTest {
         os2 = oshi.getOperatingSystem();
         mem2 = oshi.getMemory();
         fs2 = oshi.getFileStores();
-        proc2 = oshi.getProcessors();
+        proc2 = oshi.getProcessor();
         ps2 = oshi.getPowerSources();
         Assert.assertNotSame(os1, os2);
         Assert.assertNotSame(mem1, mem2);
@@ -357,7 +366,7 @@ public class OshiPlatformCacheTest {
     @Test
     public void getMemory() {
         OshiPlatformCache oshi = newOshiPlatformCache();
-        Memory memory = oshi.getMemory();
+        GlobalMemory memory = oshi.getMemory();
         Assert.assertNotNull(memory);
 
         long avail = memory.getAvailable();
@@ -375,13 +384,12 @@ public class OshiPlatformCacheTest {
     @Test
     public void getProcessors() {
         OshiPlatformCache oshi = newOshiPlatformCache();
-        Map<String, Processor> processors = oshi.getProcessors();
-        Assert.assertNotNull(processors);
+        CentralProcessor processor = oshi.getProcessor();
+        Assert.assertNotNull(processor);
 
         Util.sleep(2000L); // sleep to let processors be able to calculate load
 
-        int i = 0;
-        for (Processor processor : processors.values()) {
+        for (int i = 0; i < processor.getLogicalProcessorCount(); i++) {
             String name = processor.getName();
             String family;
             try {
@@ -402,7 +410,7 @@ public class OshiPlatformCacheTest {
             }
             String stepping;
             try {
-               stepping =  processor.getStepping();
+                stepping = processor.getStepping();
             } catch (UnsupportedOperationException e) {
                 stepping = "";
                 print(processor.getClass().getName() + ".getStepping() unsupported on " + System.getProperty("os.name")
@@ -412,7 +420,7 @@ public class OshiPlatformCacheTest {
             String vendor = processor.getVendor();
             double systemCpuLoad = processor.getSystemCpuLoad();
             double systemLoadAverage = processor.getSystemLoadAverage();
-            int processorNumber = processor.getProcessorNumber();
+            int processorNumber = i;
             long systemUpTime = processor.getSystemUptime();
             long vendorFrequency = processor.getVendorFreq();
             boolean isCpu64bit;
@@ -423,13 +431,13 @@ public class OshiPlatformCacheTest {
                         + " " + System.getProperty("os.version") + " " + System.getProperty("os.arch"));
                 isCpu64bit = false;
             }
-            long[] processorCpuLoadTicks = processor.getProcessorCpuLoadTicks();
+            long[] processorCpuLoadTicks = processor.getProcessorCpuLoadTicks()[i];
             long[] systemCpuLoadTicks = processor.getSystemCpuLoadTicks();
 
             processor.getProcessorCpuLoadBetweenTicks();
             processor.getSystemCpuLoadBetweenTicks();
             Util.sleep(1100L); // provide some time to let the getXCpuLoadBetweenTicks have good data to use
-            double processorCpuLoadBetweenTicks = processor.getProcessorCpuLoadBetweenTicks();
+            double processorCpuLoadBetweenTicks = processor.getProcessorCpuLoadBetweenTicks()[i];
             double systemCpuLoadBetweenTicks = processor.getSystemCpuLoadBetweenTicks();
 
             Assert.assertNotNull(name);
@@ -439,7 +447,7 @@ public class OshiPlatformCacheTest {
             Assert.assertNotNull(stepping);
             Assert.assertNotNull(vendor);
 
-            print("===PROCESSOR #%d ===", ++i);
+            print("===PROCESSOR #%d ===", i);
             print("  Name=[%s]", name);
             print("  Family=[%s]", family);
             print("  Identifier=[%s]", identifier);
@@ -500,7 +508,7 @@ public class OshiPlatformCacheTest {
     }
 
     private OshiPlatformCache newOshiPlatformCache() {
-        return new OshiPlatformCache("testFeedId");
+        return new OshiPlatformCache("testFeedId", null);
     }
 
     private void print(String msg, Object... args) {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.hawkular.agent.monitor.protocol.platform;
 
 import java.util.HashMap;
@@ -23,13 +22,15 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
-import org.hawkular.agent.monitor.inventory.Name;
+import org.hawkular.agent.monitor.inventory.ID;
+import org.hawkular.agent.monitor.protocol.platform.Constants.PlatformMetricType;
 import org.hawkular.agent.monitor.protocol.platform.Constants.PlatformResourceType;
+import org.hawkular.agent.monitor.util.Util;
 
 import oshi.SystemInfo;
-import oshi.hardware.Memory;
+import oshi.hardware.CentralProcessor;
+import oshi.hardware.GlobalMemory;
 import oshi.hardware.PowerSource;
-import oshi.hardware.Processor;
 import oshi.software.os.OSFileStore;
 import oshi.software.os.OperatingSystem;
 
@@ -42,16 +43,26 @@ import oshi.software.os.OperatingSystem;
  */
 public class OshiPlatformCache {
     private SystemInfo sysInfo;
-    private final Map<Constants.PlatformResourceType, Map<String, ? extends Object>> sysInfoCache;
+    private final Map<PlatformResourceType, Map<String, ? extends Object>> sysInfoCache;
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     private final ReadLock rLock = rwLock.readLock();
     private final WriteLock wLock = rwLock.writeLock();
     private final String feedId;
+    private final String machineId;
 
-    public OshiPlatformCache(String feedId) {
+    /**
+     * Creates the cache of OSHi platform data.
+     *
+     * @param feedId       he feed ID
+     * @param machineId    the machine ID - if null, one will be attempted to be discovered
+     *
+     * @see Util#getSystemId()
+     */
+    public OshiPlatformCache(String feedId, String machineId) {
         sysInfo = new SystemInfo();
         sysInfoCache = new HashMap<>(5);
         this.feedId = feedId;
+        this.machineId = (machineId != null) ? machineId : Util.getSystemId();
     }
 
     /**
@@ -80,7 +91,7 @@ public class OshiPlatformCache {
             if (!sysInfoCache.containsKey(PlatformResourceType.OPERATING_SYSTEM)) {
                 HashMap<String, OperatingSystem> cache = new HashMap<>(1);
                 OperatingSystem os = sysInfo.getOperatingSystem();
-                cache.put(PlatformResourceType.OPERATING_SYSTEM.getName().getNameString(), os);
+                cache.put(PlatformResourceType.OPERATING_SYSTEM.getResourceTypeId().getIDString(), os);
                 sysInfoCache.put(PlatformResourceType.OPERATING_SYSTEM, cache);
             }
         } finally {
@@ -89,7 +100,7 @@ public class OshiPlatformCache {
             try {
                 wLock.unlock();
                 ret = (OperatingSystem) sysInfoCache.get(PlatformResourceType.OPERATING_SYSTEM)
-                        .get(PlatformResourceType.OPERATING_SYSTEM.getName().getNameString());
+                        .get(PlatformResourceType.OPERATING_SYSTEM.getResourceTypeId().getIDString());
 
             } finally {
                 rLock.unlock();
@@ -135,16 +146,16 @@ public class OshiPlatformCache {
     /**
      * @return information about all the platform's memory
      */
-    public Memory getMemory() {
-        Memory ret;
+    public GlobalMemory getMemory() {
+        GlobalMemory ret;
 
         wLock.lock();
         try {
 
             if (!sysInfoCache.containsKey(PlatformResourceType.MEMORY)) {
-                HashMap<String, Memory> cache = new HashMap<>(1);
-                Memory mem = sysInfo.getHardware().getMemory();
-                cache.put(PlatformResourceType.MEMORY.getName().getNameString(), mem);
+                HashMap<String, GlobalMemory> cache = new HashMap<>(1);
+                GlobalMemory mem = sysInfo.getHardware().getMemory();
+                cache.put(PlatformResourceType.MEMORY.getResourceTypeId().getIDString(), mem);
                 sysInfoCache.put(PlatformResourceType.MEMORY, cache);
             }
         } finally {
@@ -152,8 +163,8 @@ public class OshiPlatformCache {
             rLock.lock();
             try {
                 wLock.unlock();
-                ret = (Memory) sysInfoCache.get(PlatformResourceType.MEMORY)
-                        .get(PlatformResourceType.MEMORY.getName().getNameString());
+                ret = (GlobalMemory) sysInfoCache.get(PlatformResourceType.MEMORY)
+                        .get(PlatformResourceType.MEMORY.getResourceTypeId().getIDString());
             } finally {
                 rLock.unlock();
             }
@@ -165,21 +176,16 @@ public class OshiPlatformCache {
     /**
      * @return information about all processors/CPUs on the platform
      */
-    @SuppressWarnings("unchecked")
-    public Map<String, Processor> getProcessors() {
-        Map<String, Processor> ret;
+    public CentralProcessor getProcessor() {
+        CentralProcessor ret;
 
         wLock.lock();
         try {
 
             if (!sysInfoCache.containsKey(PlatformResourceType.PROCESSOR)) {
-                HashMap<String, Processor> cache = new HashMap<>();
-                Processor[] arr = sysInfo.getHardware().getProcessors();
-                if (arr != null) {
-                    for (Processor item : arr) {
-                        cache.put(String.valueOf(item.getProcessorNumber()), item);
-                    }
-                }
+                HashMap<String, CentralProcessor> cache = new HashMap<>(1);
+                CentralProcessor cp = sysInfo.getHardware().getProcessor();
+                cache.put(PlatformResourceType.PROCESSOR.getResourceTypeId().getIDString(), cp);
                 sysInfoCache.put(PlatformResourceType.PROCESSOR, cache);
             }
         } finally {
@@ -187,7 +193,8 @@ public class OshiPlatformCache {
             rLock.lock();
             try {
                 wLock.unlock();
-                ret = (Map<String, Processor>) sysInfoCache.get(PlatformResourceType.PROCESSOR);
+                ret = (CentralProcessor) sysInfoCache.get(PlatformResourceType.PROCESSOR)
+                        .get(PlatformResourceType.PROCESSOR.getResourceTypeId().getIDString());
             } finally {
                 rLock.unlock();
             }
@@ -237,7 +244,7 @@ public class OshiPlatformCache {
      * @param metricToCollect the metric to collect
      * @return the value of the metric, or null if there is no power source with the given name
      */
-    public Double getPowerSourceMetric(String powerSourceName, Name metricToCollect) {
+    public Double getPowerSourceMetric(String powerSourceName, ID metricToCollect) {
 
         Map<String, PowerSource> cache = getPowerSources();
         PowerSource powerSource = cache.get(powerSourceName);
@@ -245,9 +252,9 @@ public class OshiPlatformCache {
             return null;
         }
 
-        if (Constants.POWER_SOURCE_REMAINING_CAPACITY.equals(metricToCollect)) {
+        if (PlatformMetricType.POWER_SOURCE_REMAINING_CAPACITY.getMetricTypeId().equals(metricToCollect)) {
             return powerSource.getRemainingCapacity();
-        } else if (Constants.POWER_SOURCE_TIME_REMAINING.equals(metricToCollect)) {
+        } else if (PlatformMetricType.POWER_SOURCE_TIME_REMAINING.getMetricTypeId().equals(metricToCollect)) {
             return powerSource.getTimeRemaining();
         } else {
             throw new UnsupportedOperationException("Invalid power source metric to collect: " + metricToCollect);
@@ -261,16 +268,25 @@ public class OshiPlatformCache {
      * @param metricToCollect the metric to collect
      * @return the value of the metric, or null if there is no processor with the given number
      */
-    public Double getProcessorMetric(String processorNumber, Name metricToCollect) {
+    public Double getProcessorMetric(String processorNumber, ID metricToCollect) {
 
-        Map<String, Processor> cache = getProcessors();
-        Processor processor = cache.get(processorNumber);
+        CentralProcessor processor = getProcessor();
         if (processor == null) {
             return null;
         }
 
-        if (Constants.PROCESSOR_CPU_USAGE.equals(metricToCollect)) {
-            return processor.getProcessorCpuLoadBetweenTicks();
+        int processorIndex;
+        try {
+            processorIndex = Integer.parseInt(processorNumber);
+            if (processorIndex < 0 || processorIndex >= processor.getLogicalProcessorCount()) {
+                return null;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+
+        if (PlatformMetricType.PROCESSOR_CPU_USAGE.getMetricTypeId().equals(metricToCollect)) {
+            return processor.getProcessorCpuLoadBetweenTicks()[processorIndex];
         } else {
             throw new UnsupportedOperationException("Invalid processor metric to collect: " + metricToCollect);
         }
@@ -283,7 +299,7 @@ public class OshiPlatformCache {
      * @param metricToCollect the metric to collect
      * @return the value of the metric, or null if there is no file store with the given name
      */
-    public Double getFileStoreMetric(String fileStoreNameName, Name metricToCollect) {
+    public Double getFileStoreMetric(String fileStoreNameName, ID metricToCollect) {
 
         Map<String, OSFileStore> cache = getFileStores();
         OSFileStore fileStore = cache.get(fileStoreNameName);
@@ -291,9 +307,9 @@ public class OshiPlatformCache {
             return null;
         }
 
-        if (Constants.FILE_STORE_TOTAL_SPACE.equals(metricToCollect)) {
+        if (PlatformMetricType.FILE_STORE_TOTAL_SPACE.getMetricTypeId().equals(metricToCollect)) {
             return Double.valueOf(fileStore.getTotalSpace());
-        } else if (Constants.FILE_STORE_USABLE_SPACE.equals(metricToCollect)) {
+        } else if (PlatformMetricType.FILE_STORE_USABLE_SPACE.getMetricTypeId().equals(metricToCollect)) {
             return Double.valueOf(fileStore.getUsableSpace());
         } else {
             throw new UnsupportedOperationException("Invalid file store metric to collect: " + metricToCollect);
@@ -306,16 +322,37 @@ public class OshiPlatformCache {
      * @param metricToCollect the metric to collect
      * @return the value of the metric
      */
-    public Double getMemoryMetric(Name metricToCollect) {
+    public Double getMemoryMetric(ID metricToCollect) {
 
-        Memory mem = getMemory();
+        GlobalMemory mem = getMemory();
 
-        if (Constants.MEMORY_AVAILABLE.equals(metricToCollect)) {
+        if (PlatformMetricType.MEMORY_AVAILABLE.getMetricTypeId().equals(metricToCollect)) {
             return Double.valueOf(mem.getAvailable());
-        } else if (Constants.MEMORY_TOTAL.equals(metricToCollect)) {
+        } else if (PlatformMetricType.MEMORY_TOTAL.getMetricTypeId().equals(metricToCollect)) {
             return Double.valueOf(mem.getTotal());
         } else {
             throw new UnsupportedOperationException("Invalid memory metric to collect: " + metricToCollect);
+        }
+    }
+
+    /**
+     * Returns the given OS metric's value.
+     *
+     * @param metricId the metric to collect
+     * @return the value of the metric
+     */
+    public Double getOperatingSystemMetric(ID metricId) {
+
+        CentralProcessor cp = getProcessor();
+
+        if (PlatformMetricType.OS_SYS_CPU_LOAD.getMetricTypeId().equals(metricId)) {
+            return Double.valueOf(cp.getSystemCpuLoad());
+        } else if (PlatformMetricType.OS_SYS_LOAD_AVG.getMetricTypeId().equals(metricId)) {
+            return Double.valueOf(cp.getSystemLoadAverage());
+        } else if (PlatformMetricType.OS_PROCESS_COUNT.getMetricTypeId().equals(metricId)) {
+            return Double.valueOf(cp.getProcessCount());
+        } else {
+            throw new UnsupportedOperationException("Invalid OS metric to collect: " + metricId);
         }
     }
 
@@ -327,8 +364,11 @@ public class OshiPlatformCache {
      * @param metricToCollect the metric to collect
      * @return the value of the metric, or null if there is no resource identified by the node
      */
-    public Double getMetric(PlatformResourceNode node, Name metricToCollect) {
+    public Double getMetric(PlatformResourceNode node, ID metricToCollect) {
         switch (node.getType()) {
+            case OPERATING_SYSTEM: {
+                return getOperatingSystemMetric(metricToCollect);
+            }
             case MEMORY: {
                 return getMemoryMetric(metricToCollect);
             }
@@ -405,7 +445,7 @@ public class OshiPlatformCache {
 
             } else if (searchType == PlatformResourceType.MEMORY) {
 
-                String id = PlatformResourceType.MEMORY.getName().getNameString();
+                String id = PlatformResourceType.MEMORY.getResourceTypeName().getNameString();
                 if (PlatformPath.ANY_NAME.equals(searchName) || searchName.equals(id)) {
                     PlatformPath resourcePath = PlatformPath.builder()
                             .segments(osPath)
@@ -417,9 +457,9 @@ public class OshiPlatformCache {
 
             } else if (searchType == PlatformResourceType.PROCESSOR) {
 
-                Map<String, Processor> processors = getProcessors();
-                for (Processor processor : processors.values()) {
-                    String id = String.valueOf(processor.getProcessorNumber());
+                CentralProcessor centralProcessor = getProcessor();
+                for (int i = 0; i < centralProcessor.getLogicalProcessorCount(); i++) {
+                    String id = String.valueOf(i);
                     if (PlatformPath.ANY_NAME.equals(searchName) || searchName.equals(id)) {
                         PlatformPath resourcePath = PlatformPath.builder()
                                 .segments(osPath)
@@ -451,5 +491,12 @@ public class OshiPlatformCache {
         }
 
         return results;
+    }
+
+    /**
+     * @return the unique machine ID for this platform if it is known. Otherwise, null is returned.
+     */
+    public String getMachineId() {
+        return machineId;
     }
 }

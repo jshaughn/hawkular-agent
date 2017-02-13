@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,6 +16,7 @@
  */
 package org.hawkular.agent.monitor.extension;
 
+import org.hawkular.agent.monitor.util.WildflyCompatibilityUtils;
 import org.jboss.as.controller.Extension;
 import org.jboss.as.controller.ExtensionContext;
 import org.jboss.as.controller.SubsystemRegistration;
@@ -27,12 +28,12 @@ import org.jboss.msc.service.ServiceName;
 
 public class SubsystemExtension implements Extension {
 
-    static final String SUBSYSTEM_NAME = "hawkular-wildfly-agent";
+    public static final String SUBSYSTEM_NAME = "hawkular-wildfly-agent";
     static final String NAMESPACE = "urn:org.hawkular.agent:agent:1.0";
     static final int MAJOR_VERSION = 1;
     static final int MINOR_VERSION = 0;
     static final int MICRO_VERSION = 0;
-    static final ServiceName SERVICE_NAME = ServiceName.of("org.hawkular.agent.").append(SUBSYSTEM_NAME);
+    public static final ServiceName SERVICE_NAME = ServiceName.of("org.hawkular.agent.").append(SUBSYSTEM_NAME);
 
     private static final String RESOURCE_NAME = SubsystemExtension.class.getPackage().getName() + ".LocalDescriptions";
 
@@ -58,7 +59,7 @@ public class SubsystemExtension implements Extension {
                 MAJOR_VERSION, MINOR_VERSION, MICRO_VERSION);
 
         // This subsystem should be runnable on a host
-        subsystem.setHostCapable();
+        WildflyCompatibilityUtils.subsystemSetHostCapable(subsystem);
 
         final ManagementResourceRegistration registration = subsystem
                 .registerSubsystemModel(SubsystemDefinition.INSTANCE);

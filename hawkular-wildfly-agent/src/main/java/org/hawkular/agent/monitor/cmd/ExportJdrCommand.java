@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,7 +39,7 @@ import org.hawkular.cmdgw.api.ExportJdrResponse;
 import org.hawkular.cmdgw.api.MessageUtils;
 import org.hawkular.cmdgw.api.ResponseStatus;
 import org.hawkular.dmr.api.OperationBuilder;
-import org.hawkular.inventory.api.model.CanonicalPath;
+import org.hawkular.inventory.paths.CanonicalPath;
 import org.jboss.as.controller.client.ModelControllerClient;
 import org.jboss.dmr.ModelNode;
 
@@ -82,7 +82,7 @@ public class ExportJdrCommand extends AbstractResourcePathCommand<ExportJdrReque
         for (Operation<DMRNodeLocation> op : ops) {
             if (requestedOpName.equals(op.getID().getIDString())) {
                 opLocation = dmrContext.getLocationResolver().absolutize(resource.getLocation(), op.getLocation());
-                actualOperationName = op.getOperationName();
+                actualOperationName = op.getInternalName();
                 break;
             }
         }
@@ -121,6 +121,11 @@ public class ExportJdrCommand extends AbstractResourcePathCommand<ExportJdrReque
     @Override
     protected void validate(BasicMessageWithExtraData<ExportJdrRequest> envelope,
             MonitoredEndpoint<? extends AbstractEndpointConfiguration> endpoint) {
+    }
+
+    @Override
+    protected boolean modifiesResource() {
+        return false;
     }
 
     @Override

@@ -35,9 +35,13 @@ public class MetricDataPayloadBuilderImpl implements MetricDataPayloadBuilder {
     // key is metric ID, value is list of data points where a data point is a map with timestamp and value
     private Map<String, List<Map<String, Number>>> allGauges = new HashMap<>();
     private Map<String, List<Map<String, Number>>> allCounters = new HashMap<>();
+    private Map<String, List<Map<String, Object>>> allStrings = new HashMap<>();
 
     // a running count of the number of data points that have been added
     private int count = 0;
+
+    // if not null, this is the tenant ID to associate all the data with (null means used the agent tenant ID)
+    private String tenantId = null;
 
     @Override
     public void addDataPoint(String key, long timestamp, double value, MetricType metricType) {
@@ -73,6 +77,21 @@ public class MetricDataPayloadBuilderImpl implements MetricDataPayloadBuilder {
         count++;
     }
 
+    @Override
+    public void addDataPoint(String key, long timestamp, String value) {
+        List<Map<String, Object>> data = this.allStrings.get(key);
+        if (data == null) {
+            // we haven't seen this metric ID before, create a new list of data points
+            data = new ArrayList<Map<String, Object>>();
+            this.allStrings.put(key, data);
+        }
+        Map<String, Object> timestampAndValue = new HashMap<>(2);
+        timestampAndValue.put("timestamp", Long.valueOf(timestamp));
+        timestampAndValue.put("value", (value != null) ? value : "");
+        data.add(timestampAndValue);
+        count++;
+    }
+
     public Map<String, List<Map<String, Object>>> toObjectPayload() {
         Map<String, List<Map<String, Object>>> fullMessageObject = new HashMap<>();
 
@@ -95,6 +114,15 @@ public class MetricDataPayloadBuilderImpl implements MetricDataPayloadBuilder {
         }
 
         allOfSpecificType = new ArrayList<>();
+        fullMessageObject.put("strings", allOfSpecificType);
+        for (Map.Entry<String, List<Map<String, Object>>> metricEntry : allStrings.entrySet()) {
+            Map<String, Object> metricKeyAndData = new HashMap<>(2);
+            metricKeyAndData.put("id", metricEntry.getKey());
+            metricKeyAndData.put("data", metricEntry.getValue());
+            allOfSpecificType.add(metricKeyAndData);
+        }
+
+        allOfSpecificType = new ArrayList<>();
         fullMessageObject.put("availabilities", allOfSpecificType); // we never send avails
 
         return fullMessageObject;
@@ -109,5 +137,15 @@ public class MetricDataPayloadBuilderImpl implements MetricDataPayloadBuilder {
     @Override
     public int getNumberDataPoints() {
         return count;
+    }
+
+    @Override
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
+    }
+
+    @Override
+    public String getTenantId() {
+        return this.tenantId;
     }
 }

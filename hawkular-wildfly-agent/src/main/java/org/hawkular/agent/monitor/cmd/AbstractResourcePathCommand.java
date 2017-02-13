@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,7 +39,7 @@ import org.hawkular.cmdgw.api.ResourcePathResponse;
 import org.hawkular.cmdgw.api.ResponseStatus;
 import org.hawkular.cmdgw.api.ServerRefreshIndicator;
 import org.hawkular.dmr.api.OperationBuilder.OperationResult;
-import org.hawkular.inventory.api.model.CanonicalPath;
+import org.hawkular.inventory.paths.CanonicalPath;
 import org.jboss.as.controller.client.ModelControllerClient;
 import org.jboss.dmr.ModelNode;
 import org.jboss.dmr.Property;
@@ -49,8 +49,8 @@ import org.jboss.dmr.Property;
  *
  * @author <a href="https://github.com/ppalaga">Peter Palaga</a>
  */
-public abstract class AbstractResourcePathCommand<REQ extends ResourcePathRequest, //
-RESP extends ResourcePathResponse> implements Command<REQ, RESP> {
+public abstract class AbstractResourcePathCommand<REQ extends ResourcePathRequest, RESP extends ResourcePathResponse>
+        implements Command<REQ, RESP> {
     private static final MsgLogger log = AgentLoggers.getLogger(AbstractResourcePathCommand.class);
 
     /**
@@ -96,30 +96,42 @@ RESP extends ResourcePathResponse> implements Command<REQ, RESP> {
             // From the inventory manager, we can get the actual resource.
             CanonicalPath canonicalPath = CanonicalPath.fromString(rawResourcePath);
 
-            String resourceId = canonicalPath.ids().getResourcePath().getSegment().getElementId();
+            String resourceId;
+            try {
+                resourceId = canonicalPath.ids().getResourcePath().getSegment().getElementId();
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Bad resource path specified in command: " + rawResourcePath);
+            }
             ResourceIdParts idParts = InventoryIdUtil.parseResourceId(resourceId);
             String modelNodePath = idParts.getIdPart();
             validate(modelNodePath, envelope);
 
             String managedServerName = idParts.getManagedServerName();
-            EndpointService<DMRNodeLocation, DMRSession> //
-            endpointService =
-                    context.getDiscoveryService().getProtocolServices().getDmrProtocolService().getEndpointServices()
-                            .get(managedServerName);
+            EndpointService<DMRNodeLocation, DMRSession> endpointService = context.getDiscoveryService()
+                    .getProtocolServices()
+                    .getDmrProtocolService()
+                    .getEndpointServices()
+                    .get(managedServerName);
             if (endpointService == null) {
                 throw new IllegalArgumentException(String.format(
                         "Cannot perform [%s] on a [%s] given by inventory path [%s]: unknown managed server [%s]",
-                        this.getOperationName(envelope), entityType, managedServerName));
+                        this.getOperationName(envelope), entityType, resourceId, managedServerName));
             }
 
             validate(envelope, endpointService.getMonitoredEndpoint());
+
+            if (modifiesResource()) {
+                if (context.getDiscoveryService().isImmutable()) {
+                    throw new IllegalStateException("Command not allowed because the agent is immutable");
+                }
+            }
 
             DMRSession session = endpointService.openSession();
 
             controllerClient = session.getClient();
 
-            binaryData =
-                    execute(controllerClient, endpointService, modelNodePath, envelope, response, context, session);
+            binaryData = execute(controllerClient, endpointService, modelNodePath, envelope, response, context,
+                    session);
             success(envelope, response);
 
         } catch (Throwable t) {
@@ -129,7 +141,7 @@ RESP extends ResourcePathResponse> implements Command<REQ, RESP> {
 
             String msg = String.format(
                     "Could not perform [%s] on a [%s] given by inventory path [%s] requested on [%s]: %s",
-                    this.getOperationName(envelope), entityType, rawResourcePath, formattedTimestamp, t.getMessage());
+                    this.getOperationName(envelope), entityType, rawResourcePath, formattedTimestamp, t.toString());
             response.setMessage(msg);
             log.debug(msg, t);
         } finally {
@@ -163,7 +175,7 @@ RESP extends ResourcePathResponse> implements Command<REQ, RESP> {
             EndpointService<DMRNodeLocation, DMRSession> endpointService,
             String modelNodePath, BasicMessageWithExtraData<REQ> envelope, RESP response, CommandContext context,
             DMRSession dmrContext)
-                    throws Exception;
+            throws Exception;
 
     /**
      * {@code modelNodePath} validation for subclasses.
@@ -242,5 +254,17 @@ RESP extends ResourcePathResponse> implements Command<REQ, RESP> {
                     nameFromPath, newName);
             throw new IllegalArgumentException(msg);
         }
+    }
+
+    /**
+     * If the command may permanently modify the managed resource, this method should return true which means the command
+     * will be aborted if the agent is configured to be immutable. This method implementation always returns true.
+     * Subclasses are free to override this and return false if the command never modifies the managed resource.
+     *
+     * @return true if the operation may modify something on the managed resource permanently
+     * @see #execute(BasicMessageWithExtraData, CommandContext)
+     */
+    protected boolean modifiesResource() {
+        return true;
     }
 }

@@ -1,6 +1,6 @@
 <!--
 
-    Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+    Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
     and other contributors as indicated by the @author tags.
 
     Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,14 +22,15 @@
     <artifact name="${org.hawkular.commons:hawkular-bus-common}"/>
     <artifact name="${org.hawkular.agent:hawkular-dmr-client}"/>
     <artifact name="${org.hawkular.agent:hawkular-wildfly-agent}"/>
-    <artifact name="${org.hawkular.agent:prometheus-scraper}"/>
-    <artifact name="${org.hawkular.cmdgw:hawkular-command-gateway-api}"/>
-    <artifact name="${org.hawkular.inventory:hawkular-inventory-json-helper}"/>
+    <artifact name="${org.hawkular.commons:hawkular-command-gateway-api}"/>
+    <artifact name="${org.hawkular.commons:hawkular-inventory-paths}"/>
     <artifact name="${org.hawkular.inventory:hawkular-inventory-api}"/>
+    <artifact name="${org.hawkular.inventory:hawkular-inventory-json-helper}"/>
     <artifact name="${org.jgrapht:jgrapht-core}"/>
+    <artifact name="${org.wildfly.plugins:wildfly-plugin-core}"/>
     <artifact name="${io.dropwizard.metrics:metrics-core}"/>
-    <artifact name="${com.squareup.okhttp:okhttp}"/>
-    <artifact name="${com.squareup.okhttp:okhttp-ws}"/>
+    <artifact name="${com.squareup.okhttp3:okhttp}"/>
+    <artifact name="${com.squareup.okhttp3:okhttp-ws}"/>
     <artifact name="${com.squareup.okio:okio}"/>
 
     <!-- These are pulled in due to hawkular-inventory-json-helper.jar. -->
@@ -70,10 +71,6 @@
     <artifact name="${httpcore}" />
     <artifact name="${httpmime}" />
      -->
-
-     <!-- Prometheus deps -->
-    <artifact name="${io.prometheus.client:model}" />
-    <artifact name="${com.google.protobuf:protobuf-java}" />
 
   </resources>
 

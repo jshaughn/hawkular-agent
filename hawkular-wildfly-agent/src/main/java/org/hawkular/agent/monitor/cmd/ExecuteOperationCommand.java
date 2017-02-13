@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +36,7 @@ import org.hawkular.cmdgw.api.ExecuteOperationRequest;
 import org.hawkular.cmdgw.api.ExecuteOperationResponse;
 import org.hawkular.dmr.api.OperationBuilder;
 import org.hawkular.dmr.api.OperationBuilder.OperationResult;
-import org.hawkular.inventory.api.model.CanonicalPath;
+import org.hawkular.inventory.paths.CanonicalPath;
 import org.jboss.as.controller.client.ModelControllerClient;
 
 /**
@@ -51,7 +51,6 @@ public class ExecuteOperationCommand extends
         super("Execute Operation", "DMR Node");
     }
 
-    /** @see org.hawkular.agent.monitor.cmd.AbstractResourcePathCommand#createResponse() */
     @Override
     protected ExecuteOperationResponse createResponse() {
         return new ExecuteOperationResponse();
@@ -64,6 +63,16 @@ public class ExecuteOperationCommand extends
 
     @Override
     protected void validate(String modelNodePath, BasicMessageWithExtraData<ExecuteOperationRequest> envelope) {
+    }
+
+    @Override
+    protected void validate(BasicMessageWithExtraData<ExecuteOperationRequest> envelope,
+            MonitoredEndpoint<? extends AbstractEndpointConfiguration> endpoint) {
+    }
+
+    @Override
+    protected boolean modifiesResource() {
+        return false; // we don't know yet - assume it won't modify anything - we'll do the real check in execute
     }
 
     @Override
@@ -97,7 +106,13 @@ public class ExecuteOperationCommand extends
         for (Operation<DMRNodeLocation> op : ops) {
             if (requestedOpName.equals(op.getName().getNameString())) {
                 opLocation = dmrContext.getLocationResolver().absolutize(resource.getLocation(), op.getLocation());
-                actualOperationName = op.getOperationName();
+                actualOperationName = op.getInternalName();
+                if (op.getModifies()) {
+                    if (context.getDiscoveryService().isImmutable()) {
+                        throw new IllegalStateException(
+                                "Operation [" + requestedOpName + "] not allowed because the agent is immutable");
+                    }
+                }
                 break;
             }
         }
@@ -131,10 +146,4 @@ public class ExecuteOperationCommand extends
 
         return null;
     }
-
-    @Override
-    protected void validate(BasicMessageWithExtraData<ExecuteOperationRequest> envelope,
-            MonitoredEndpoint<? extends AbstractEndpointConfiguration> endpoint) {
-    }
-
 }

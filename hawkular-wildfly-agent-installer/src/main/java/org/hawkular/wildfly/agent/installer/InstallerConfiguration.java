@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,18 +51,18 @@ public class InstallerConfiguration {
     static final String OPTION_TARGET_CONFIG = "target-config";
     static final String OPTION_SUBSYSTEM_SNIPPET = "subsystem-snippet";
     static final String OPTION_SERVER_URL = "server-url";
+    static final String OPTION_DOWNLOAD_SERVER_URL = "download-server-url";
     static final String OPTION_KEYSTORE_PATH = "keystore-path";
     static final String OPTION_KEYSTORE_PASSWORD = "keystore-password";
     static final String OPTION_KEY_PASSWORD = "key-password";
     static final String OPTION_KEY_ALIAS = "key-alias";
     static final String OPTION_USERNAME = "username";
     static final String OPTION_PASSWORD = "password";
-    static final String OPTION_SECURITY_KEY = "security-key";
-    static final String OPTION_SECURITY_SECRET = "security-secret";
     static final String OPTION_MANAGED_SERVER_NAME = "managed-server-name";
     static final String OPTION_FEED_ID = "feed-id";
     static final String OPTION_TENANT_ID = "tenant-id";
     static final String OPTION_METRICS_ONLY_MODE = "metrics-only";
+    static final String OPTION_MANAGED_RESOURCE_TYPE_SETS = "managed-server-resource-type-sets";
 
     static ProcessedCommand<?> buildCommandLineOptions() throws Exception {
         ProcessedCommandBuilder cmd = new ProcessedCommandBuilder();
@@ -118,13 +118,21 @@ public class InstallerConfiguration {
                 .name(InstallerConfiguration.OPTION_MODULE_DISTRIBUTION)
                 .optionType(OptionType.NORMAL)
                 .type(String.class)
-                .description("Hawkular WildFly Agent Module distribution zip file")
+                .description("Hawkular WildFly Agent Module distribution zip file - can be a file path or URL")
                 .create());
         cmd.addOption(new ProcessedOptionBuilder()
                 .name(InstallerConfiguration.OPTION_SERVER_URL)
                 .optionType(OptionType.NORMAL)
                 .type(String.class)
-                .description("Server URL where the agent will send its monitoring data")
+                .description("Server URL where the agent will send its monitoring data. "
+                        + "This is a string to be set as the storage adapter URL.")
+                .create());
+        cmd.addOption(new ProcessedOptionBuilder()
+                .name(InstallerConfiguration.OPTION_DOWNLOAD_SERVER_URL)
+                .optionType(OptionType.NORMAL)
+                .type(String.class)
+                .description("Server URL from which the installer will download content it may need. If not "
+                        + "specified and the installer needs to download something then --server-url will be used.")
                 .create());
         cmd.addOption(new ProcessedOptionBuilder()
                 .name(InstallerConfiguration.OPTION_TARGET_CONFIG)
@@ -167,6 +175,14 @@ public class InstallerConfiguration {
                         + "(inventory will not be stored and no websocket connection to a Hawkular "
                         + "Server will be made.) If true, you must specify a tenant-id.")
                 .create());
+        cmd.addOption(new ProcessedOptionBuilder()
+                .name(InstallerConfiguration.OPTION_MANAGED_RESOURCE_TYPE_SETS)
+                .optionType(OptionType.NORMAL)
+                .type(String.class)
+                .description("If true, the agent will be configured to monitor these resource type sets. "
+                        + "If not provided, a default set will be used based on the type of application "
+                        + "server where the agent is being installed into (standalone or domain).")
+                .create());
 
         // SSL/security related config options
 
@@ -202,27 +218,13 @@ public class InstallerConfiguration {
                 .name(InstallerConfiguration.OPTION_USERNAME)
                 .optionType(OptionType.NORMAL)
                 .type(String.class)
-                .description("User the agent will use when connecting to Hawkular Server. Ignored if "
-                        + OPTION_SECURITY_KEY + " is provided.")
+                .description("User the agent will use when connecting to Hawkular Server.")
                 .create());
         cmd.addOption(new ProcessedOptionBuilder()
                 .name(InstallerConfiguration.OPTION_PASSWORD)
                 .optionType(OptionType.NORMAL)
                 .type(String.class)
-                .description("Credentials agent will use when connecting to Hawkular Server. Ignored if "
-                        + OPTION_SECURITY_KEY + " is provided.")
-                .create());
-        cmd.addOption(new ProcessedOptionBuilder()
-                .name(InstallerConfiguration.OPTION_SECURITY_KEY)
-                .optionType(OptionType.NORMAL)
-                .type(String.class)
-                .description("Security key that the agent will use when authenticating with Hawkular Server.")
-                .create());
-        cmd.addOption(new ProcessedOptionBuilder()
-                .name(InstallerConfiguration.OPTION_SECURITY_SECRET)
-                .optionType(OptionType.NORMAL)
-                .type(String.class)
-                .description("Security secret that the agent will use when authenticating with Hawkular Server.")
+                .description("Credentials agent will use when connecting to Hawkular Server.")
                 .create());
 
         return cmd.create();
@@ -278,14 +280,14 @@ public class InstallerConfiguration {
         setProperty(properties, commandLine, OPTION_TENANT_ID);
         setProperty(properties, commandLine, OPTION_METRICS_ONLY_MODE);
         setProperty(properties, commandLine, OPTION_SERVER_URL);
+        setProperty(properties, commandLine, OPTION_DOWNLOAD_SERVER_URL);
         setProperty(properties, commandLine, OPTION_KEYSTORE_PATH);
         setProperty(properties, commandLine, OPTION_KEYSTORE_PASSWORD);
         setProperty(properties, commandLine, OPTION_KEY_PASSWORD);
         setProperty(properties, commandLine, OPTION_KEY_ALIAS);
         setProperty(properties, commandLine, OPTION_USERNAME);
         setProperty(properties, commandLine, OPTION_PASSWORD);
-        setProperty(properties, commandLine, OPTION_SECURITY_KEY);
-        setProperty(properties, commandLine, OPTION_SECURITY_SECRET);
+        setProperty(properties, commandLine, OPTION_MANAGED_RESOURCE_TYPE_SETS);
     }
 
     private void setProperty(Properties props, CommandLine<?> commandLine, String option) {
@@ -299,7 +301,6 @@ public class InstallerConfiguration {
         decodeProperty(properties, OPTION_KEYSTORE_PASSWORD, encryptionKey, salt);
         decodeProperty(properties, OPTION_KEY_PASSWORD, encryptionKey, salt);
         decodeProperty(properties, OPTION_PASSWORD, encryptionKey, salt);
-        decodeProperty(properties, OPTION_SECURITY_SECRET, encryptionKey, salt);
     }
 
     private void decodeProperty(Properties prop, String option, String key, byte[] salt) throws Exception {
@@ -338,6 +339,11 @@ public class InstallerConfiguration {
         return properties.getProperty(OPTION_SERVER_URL);
     }
 
+    public String getDownloadServerUrl() {
+        String url = properties.getProperty(OPTION_DOWNLOAD_SERVER_URL);
+        return (url != null) ? url : getServerUrl();
+    }
+
     public String getKeystorePath() {
         return properties.getProperty(OPTION_KEYSTORE_PATH);
     }
@@ -362,14 +368,6 @@ public class InstallerConfiguration {
         return properties.getProperty(OPTION_PASSWORD);
     }
 
-    public String getSecurityKey() {
-        return properties.getProperty(OPTION_SECURITY_KEY);
-    }
-
-    public String getSecuritySecret() {
-        return properties.getProperty(OPTION_SECURITY_SECRET);
-    }
-
     public String getManagedServerName() {
         return properties.getProperty(OPTION_MANAGED_SERVER_NAME);
     }
@@ -384,5 +382,9 @@ public class InstallerConfiguration {
 
     public boolean isMetricsOnlyMode() {
         return Boolean.parseBoolean(properties.getProperty(OPTION_METRICS_ONLY_MODE, "false"));
+    }
+
+    public String getManagedResourceTypeSets() {
+        return properties.getProperty(OPTION_MANAGED_RESOURCE_TYPE_SETS);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,6 +16,7 @@
  */
 package org.hawkular.agent.monitor.inventory;
 
+import java.util.Map;
 import java.util.regex.Pattern;
 
 public final class AvailType<L> extends MeasurementType<L> {
@@ -28,8 +29,9 @@ public final class AvailType<L> extends MeasurementType<L> {
 
     private final Pattern upPattern;
 
-    public AvailType(ID id, Name name, AttributeLocation<L> location, Interval interval, Pattern upPattern) {
-        super(id, name, location, interval);
+    public AvailType(ID id, Name name, AttributeLocation<L> location, Interval interval, Pattern upPattern,
+            String metricIdTemplate, Map<String, String> metricTags) {
+        super(id, name, location, interval, metricIdTemplate, metricTags);
         this.upPattern = upPattern;
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -92,10 +92,11 @@ public class DMRLocationResolver implements LocationResolver<DMRNodeLocation> {
             PathAddress basePath = base.getPathAddress();
             PathAddress path = ((DMRNodeLocation) location).getPathAddress();
             if (path.equals(PathAddress.EMPTY_ADDRESS)) {
-                /* use base path */
-                return base;
+                // use base path, but retain the location's resolve-expressions/include-defaults settings
+                return new DMRNodeLocation(base.getPathAddress(),
+                        location.getResolveExpressions(), location.getIncludeDefaults());
             } else {
-                /* combine the two */
+                // combine the two - retaining the location's resolve-expressions/include-defaults settings
                 List<PathElement> segments = new ArrayList<>(basePath.size() + path.size());
                 for (PathElement segment : basePath) {
                     segments.add(segment);
@@ -104,7 +105,8 @@ public class DMRLocationResolver implements LocationResolver<DMRNodeLocation> {
                     segments.add(segment);
                 }
                 PathAddress absPath = PathAddress.pathAddress(segments);
-                return new DMRNodeLocation(absPath);
+                return new DMRNodeLocation(absPath,
+                        location.getResolveExpressions(), location.getIncludeDefaults());
             }
         }
     }

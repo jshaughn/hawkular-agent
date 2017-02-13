@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,7 +25,7 @@ import java.util.Map.Entry;
 
 import org.hawkular.agent.monitor.diagnostics.ProtocolDiagnostics;
 import org.hawkular.agent.monitor.inventory.AttributeLocation;
-import org.hawkular.agent.monitor.inventory.Name;
+import org.hawkular.agent.monitor.inventory.ID;
 import org.hawkular.agent.monitor.protocol.Driver;
 import org.hawkular.agent.monitor.protocol.ProtocolException;
 
@@ -69,8 +69,13 @@ public class PlatformDriver implements Driver<PlatformNodeLocation> {
             case 0:
                 return false;
             case 1:
-                return nodes.values().iterator().next().getType().getMetricNames()
-                        .contains(new Name(location.getAttribute()));
+                ID attributeToCheck = new ID(location.getAttribute());
+                // see if this is asking for the special "machine id" attribute
+                if (Constants.MACHINE_ID.equals(attributeToCheck.getIDString())) {
+                    return true;
+                } else {
+                    return nodes.values().iterator().next().getType().getMetricTypeIds().contains(attributeToCheck);
+                }
             default:
                 throw new ProtocolException(
                         "Platform Path [" + location.getLocation().getPlatformPath() + "] is not unique");
@@ -81,7 +86,7 @@ public class PlatformDriver implements Driver<PlatformNodeLocation> {
     public Object fetchAttribute(AttributeLocation<PlatformNodeLocation> location) throws ProtocolException {
         try {
             Map<PlatformPath, PlatformResourceNode> nodes = null;
-            Name metricToCollect = new Name(location.getAttribute()); // we know these are all metrics (no avails)
+            ID metricToCollect = new ID(location.getAttribute()); // we know these are all metrics (no avails)
             try (Context timerContext = diagnostics.getRequestTimer().time()) {
                 platform.refresh(); // refresh to make sure we get the latest data (TODO: bulk collect to avoid this)
                 nodes = platform.discoverResources(location.getLocation().getPlatformPath());
@@ -89,11 +94,21 @@ public class PlatformDriver implements Driver<PlatformNodeLocation> {
                     case 0:
                         return null;
                     case 1:
-                        return platform.getMetric(nodes.values().iterator().next(), metricToCollect);
+                        // see if this is asking for the special "machine id" attribute
+                        if (Constants.MACHINE_ID.equals(metricToCollect.getIDString())) {
+                            return platform.getMachineId();
+                        } else {
+                            return platform.getMetric(nodes.values().iterator().next(), metricToCollect);
+                        }
                     default:
                         List<Object> results = new ArrayList<>(nodes.size());
                         for (PlatformResourceNode node : nodes.values()) {
-                            results.add(platform.getMetric(node, metricToCollect));
+                            // see if this is asking for the special "machine id" attribute
+                            if (Constants.MACHINE_ID.equals(metricToCollect.getIDString())) {
+                                results.add(platform.getMachineId());
+                            } else {
+                                results.add(platform.getMetric(node, metricToCollect));
+                            }
                         }
                         return Collections.unmodifiableList(results);
                 }

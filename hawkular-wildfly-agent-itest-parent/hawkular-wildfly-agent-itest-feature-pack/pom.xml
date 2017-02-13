@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+    Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
     and other contributors as indicated by the @author tags.
 
     Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +23,9 @@
   <parent>
     <groupId>org.hawkular.agent</groupId>
     <artifactId>hawkular-wildfly-agent-itest-parent</artifactId>
-    <version>0.17.3.Final-SNAPSHOT</version>
+    <version>0.26.1.Final-SNAPSHOT</version>
   </parent>
+
   <artifactId>hawkular-wildfly-agent-itest-feature-pack</artifactId>
   <packaging>pom</packaging>
 
@@ -34,9 +35,16 @@
   <dependencies>
 
     <dependency>
-      <groupId>org.hawkular.accounts</groupId>
-      <artifactId>hawkular-accounts-feature-pack</artifactId>
+      <groupId>org.hawkular.commons</groupId>
+      <artifactId>hawkular-nest-feature-pack</artifactId>
       <type>zip</type>
+    </dependency>
+
+    <dependency>
+      <groupId>org.hawkular.commons</groupId>
+      <artifactId>hawkular-commons-embedded-cassandra-war</artifactId>
+      <type>war</type>
+      <version>${version.org.hawkular.commons}</version>
     </dependency>
 
     <dependency>
@@ -53,24 +61,23 @@
     </dependency>
 
     <dependency>
-      <groupId>org.hawkular.cmdgw</groupId>
-      <artifactId>hawkular-command-gateway-war</artifactId>
-      <version>${version.org.hawkular.cmdgw}</version>
-      <type>war</type>
-    </dependency>
-
-    <dependency>
       <groupId>org.hawkular.inventory</groupId>
-      <artifactId>hawkular-inventory-dist</artifactId>
+      <artifactId>hawkular-inventory-feature-pack</artifactId>
       <version>${version.org.hawkular.inventory}</version>
-      <type>war</type>
+      <type>zip</type>
     </dependency>
 
     <dependency>
       <groupId>org.hawkular.metrics</groupId>
-      <artifactId>hawkular-metrics-component</artifactId>
+      <artifactId>hawkular-metrics-component-dist</artifactId>
       <version>${version.org.hawkular.metrics}</version>
-      <type>war</type>
+      <type>ear</type>
+    </dependency>
+
+    <dependency>
+      <groupId>org.wildfly</groupId>
+      <artifactId>wildfly-clustering-infinispan-extension</artifactId>
+      <version>${version.org.wildfly}</version>
     </dependency>
 
   </dependencies>
@@ -92,8 +99,8 @@
             <configuration>
               <artifactItems>
                 <artifactItem>
-                  <groupId>org.hawkular.accounts</groupId>
-                  <artifactId>hawkular-accounts-feature-pack</artifactId>
+                  <groupId>org.hawkular.commons</groupId>
+                  <artifactId>hawkular-nest-feature-pack</artifactId>
                   <type>zip</type>
                   <includes>subsystem-templates/*.xml,configuration/**/*.xml</includes>
                   <outputDirectory>${project.build.directory}/feature-pack-resources</outputDirectory>
@@ -103,6 +110,19 @@
                   <artifactId>hawkular-wildfly-agent-feature-pack</artifactId>
                   <type>zip</type>
                   <includes>subsystem-templates/*.xml,configuration/**/*.xml</includes>
+                  <outputDirectory>${project.build.directory}/feature-pack-resources</outputDirectory>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.hawkular.inventory</groupId>
+                  <artifactId>hawkular-inventory-feature-pack</artifactId>
+                  <type>zip</type>
+                  <includes>subsystem-templates/*.xml,configuration/**/*.xml</includes>
+                  <outputDirectory>${project.build.directory}/feature-pack-resources</outputDirectory>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.wildfly</groupId>
+                  <artifactId>wildfly-clustering-infinispan-extension</artifactId>
+                  <includes>subsystem-templates/*.xml</includes>
                   <outputDirectory>${project.build.directory}/feature-pack-resources</outputDirectory>
                 </artifactItem>
               </artifactItems>
@@ -128,7 +148,7 @@
                   <dir>${project.build.directory}/feature-pack-resources</dir>
                   <stylesheet>${basedir}/src/main/xsl/configuration/standalone/hawkular-wildfly-agent-itest-subsystems.xsl</stylesheet>
                   <includes>
-                    <include>configuration/standalone/hawkular-accounts-subsystems.xml</include>
+                    <include>configuration/standalone/hawkular-nest-subsystems.xml</include>
                   </includes>
                   <outputDir>${project.build.directory}/feature-pack-resources</outputDir>
                   <fileMappers>
@@ -141,29 +161,45 @@
 
                 <transformationSet>
                   <dir>${project.build.directory}/feature-pack-resources</dir>
-                  <stylesheet>${basedir}/src/main/xsl/subsystem-templates/hawkular-wildfly-agent-itest-keycloak-adapter.xsl</stylesheet>
+                  <stylesheet>${basedir}/src/main/xsl/subsystem-templates/hawkular-wildfly-agent-itest-logging.xsl</stylesheet>
                   <includes>
-                    <include>subsystem-templates/hawkular-accounts-keycloak-adapter.xml</include>
+                    <include>subsystem-templates/hawkular-nest-logging.xml</include>
                   </includes>
                   <outputDir>${project.build.directory}/feature-pack-resources</outputDir>
                   <fileMappers>
                     <fileMapper implementation="org.codehaus.plexus.components.io.filemappers.RegExpFileMapper">
-                      <pattern>^subsystem-templates/hawkular-accounts-(.*)\.xml$</pattern>
+                      <pattern>^subsystem-templates/hawkular-nest-(.*)\.xml$</pattern>
                       <replacement>subsystem-templates/hawkular-wildfly-agent-itest-$1.xml</replacement>
                     </fileMapper>
                   </fileMappers>
                 </transformationSet>
+
                 <transformationSet>
                   <dir>${project.build.directory}/feature-pack-resources</dir>
                   <stylesheet>${basedir}/src/main/xsl/subsystem-templates/hawkular-wildfly-agent-itest-messaging-activemq.xsl</stylesheet>
                   <includes>
-                    <include>subsystem-templates/hawkular-accounts-messaging-activemq.xml</include>
+                    <include>subsystem-templates/hawkular-nest-messaging-activemq.xml</include>
                   </includes>
                   <outputDir>${project.build.directory}/feature-pack-resources</outputDir>
                   <fileMappers>
                     <fileMapper implementation="org.codehaus.plexus.components.io.filemappers.RegExpFileMapper">
-                      <pattern>^subsystem-templates/hawkular-accounts-(.*)\.xml$</pattern>
+                      <pattern>^subsystem-templates/hawkular-nest-(.*)\.xml$</pattern>
                       <replacement>subsystem-templates/hawkular-wildfly-agent-itest-$1.xml</replacement>
+                    </fileMapper>
+                  </fileMappers>
+                </transformationSet>
+
+                <transformationSet>
+                  <dir>${project.build.directory}/feature-pack-resources</dir>
+                  <stylesheet>${basedir}/src/main/xsl/subsystem-templates/hawkular-wildfly-agent-itest-infinispan.xsl</stylesheet>
+                  <includes>
+                    <include>subsystem-templates/infinispan.xml</include>
+                  </includes>
+                  <outputDir>${project.build.directory}/feature-pack-resources</outputDir>
+                  <fileMappers>
+                    <fileMapper implementation="org.codehaus.plexus.components.io.filemappers.RegExpFileMapper">
+                      <pattern>^.*$</pattern>
+                      <replacement>subsystem-templates/hawkular-wildfly-agent-itest-infinispan.xml</replacement>
                     </fileMapper>
                   </fileMappers>
                 </transformationSet>
