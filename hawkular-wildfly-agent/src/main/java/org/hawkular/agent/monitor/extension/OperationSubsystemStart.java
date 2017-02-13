@@ -47,23 +47,23 @@ public class OperationSubsystemStart implements OperationStepHandler {
             newThread.set(new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    if (delay > 0) {
-                        try {
+                    try {
+                        if (delay > 0) {
                             Thread.sleep(delay);
-                        } catch (Exception e) {
-                            return;
                         }
-                    }
+                        if (restart && service.isMonitorServiceStarted()) {
+                            LOGGER.warn("Hawkular Monitor Service restart requested. Will stop and restart it now.");
+                            service.stopMonitorService();
+                        } else {
+                            LOGGER.warn("Asked to start the Hawkular Monitor service");
+                        }
 
-                    if (restart && service.isMonitorServiceStarted()) {
-                        LOGGER.warn("Hawkular Monitor Service restart requested. Will stop and restart it now.");
-                        service.stopMonitorService();
-                    } else {
-                        LOGGER.warn("Asked to start the Hawkular Monitor service");
-                    }
-
-                    if (!service.isMonitorServiceStarted()) {
-                        service.startMonitorService();
+                        if (!service.isMonitorServiceStarted()) {
+                            service.startMonitorService();
+                        }
+                    } catch (Exception e) {
+                        LOGGER.warn("Aborting start of the Hawkular Monitor service: " + e);
+                        return;
                     }
                 }
             }, "Hawkular WildFly Agent Operation Start Thread"));
@@ -72,10 +72,10 @@ public class OperationSubsystemStart implements OperationStepHandler {
 
         } catch (ServiceNotFoundException snfe) {
             throw new OperationFailedException("Cannot restart Hawkular Monitor service - it is disabled", snfe);
-        } catch (InterruptException ie) {
-            newThread.get().interrupt();
-            throw new OperationFailedException("Cannot restart Hawkular Monitor service - interrupted", ie);
         } catch (Exception e) {
+            if (newThread.get() != null) {
+                newThread.get().interrupt();
+            }
             throw new OperationFailedException("Cannot restart Hawkular Monitor service", e);
         }
 
