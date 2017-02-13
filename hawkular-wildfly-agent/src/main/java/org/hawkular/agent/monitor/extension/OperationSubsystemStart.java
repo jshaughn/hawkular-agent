@@ -50,8 +50,6 @@ public class OperationSubsystemStart implements OperationStepHandler {
                     if (delay > 0) {
                         try {
                             Thread.sleep(delay);
-                        } catch (InterruptedException e) {
-                            newThread.get().interrupt();
                         } catch (Exception e) {
                             return;
                         }
@@ -74,6 +72,9 @@ public class OperationSubsystemStart implements OperationStepHandler {
 
         } catch (ServiceNotFoundException snfe) {
             throw new OperationFailedException("Cannot restart Hawkular Monitor service - it is disabled", snfe);
+        } catch (InterruptException ie) {
+            newThread.get().interrupt();
+            throw new OperationFailedException("Cannot restart Hawkular Monitor service - interrupted", ie);
         } catch (Exception e) {
             throw new OperationFailedException("Cannot restart Hawkular Monitor service", e);
         }
