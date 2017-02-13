@@ -49,28 +49,15 @@ public interface StorageAttributes {
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition SECURITY_KEY = new SimpleAttributeDefinitionBuilder("securityKey",
+    SimpleAttributeDefinition TENANT_ID = new SimpleAttributeDefinitionBuilder("tenant-id",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
+                    .setDefaultValue(new ModelNode("hawkular"))
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition SECURITY_SECRET = new SimpleAttributeDefinitionBuilder("securitySecret",
-            ModelType.STRING)
-                    .setAllowNull(true)
-                    .setAllowExpression(true)
-                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-                    .build();
-
-    SimpleAttributeDefinition TENANT_ID = new SimpleAttributeDefinitionBuilder("tenantId",
-            ModelType.STRING)
-                    .setAllowNull(true)
-                    .setAllowExpression(true)
-                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-                    .build();
-
-    SimpleAttributeDefinition FEED_ID = new SimpleAttributeDefinitionBuilder("feedId",
+    SimpleAttributeDefinition FEED_ID = new SimpleAttributeDefinitionBuilder("feed-id",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
@@ -84,28 +71,28 @@ public interface StorageAttributes {
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition USE_SSL = new SimpleAttributeDefinitionBuilder("useSSL",
+    SimpleAttributeDefinition USE_SSL = new SimpleAttributeDefinitionBuilder("use-ssl",
             ModelType.BOOLEAN)
                     .setAllowNull(true)
                     .setAllowExpression(true)
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition SECURITY_REALM = new SimpleAttributeDefinitionBuilder("securityRealm",
+    SimpleAttributeDefinition SECURITY_REALM = new SimpleAttributeDefinitionBuilder("security-realm",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition KEYSTORE_PATH = new SimpleAttributeDefinitionBuilder("keystorePath",
+    SimpleAttributeDefinition KEYSTORE_PATH = new SimpleAttributeDefinitionBuilder("keystore-path",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition KEYSTORE_PASSWORD = new SimpleAttributeDefinitionBuilder("keystorePassword",
+    SimpleAttributeDefinition KEYSTORE_PASSWORD = new SimpleAttributeDefinitionBuilder("keystore-password",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
@@ -113,24 +100,14 @@ public interface StorageAttributes {
                     .build();
 
     SimpleAttributeDefinition SERVER_OUTBOUND_SOCKET_BINDING_REF = new SimpleAttributeDefinitionBuilder(
-            "serverOutboundSocketBindingRef",
+            "server-outbound-socket-binding-ref",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition ACCOUNTS_CONTEXT = new SimpleAttributeDefinitionBuilder(
-            "accountsContext",
-            ModelType.STRING)
-                    .setAllowNull(true)
-                    .setAllowExpression(true)
-                    .setDefaultValue(new ModelNode("/hawkular/accounts/"))
-                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-                    .build();
-
-    SimpleAttributeDefinition INVENTORY_CONTEXT = new SimpleAttributeDefinitionBuilder(
-            "inventoryContext",
+    SimpleAttributeDefinition INVENTORY_CONTEXT = new SimpleAttributeDefinitionBuilder("inventory-context",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
@@ -138,7 +115,7 @@ public interface StorageAttributes {
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition METRICS_CONTEXT = new SimpleAttributeDefinitionBuilder("metricsContext",
+    SimpleAttributeDefinition METRICS_CONTEXT = new SimpleAttributeDefinitionBuilder("metrics-context",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
@@ -146,11 +123,25 @@ public interface StorageAttributes {
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition FEEDCOMM_CONTEXT = new SimpleAttributeDefinitionBuilder("feedcommContext",
+    SimpleAttributeDefinition FEEDCOMM_CONTEXT = new SimpleAttributeDefinitionBuilder("feedcomm-context",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setAllowExpression(true)
                     .setDefaultValue(new ModelNode("/hawkular/command-gateway/"))
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+    SimpleAttributeDefinition CONNECT_TIMEOUT_SECONDS = new SimpleAttributeDefinitionBuilder("connect-timeout-secs",
+            ModelType.INT)
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .setDefaultValue(new ModelNode(10))
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+    SimpleAttributeDefinition READ_TIMEOUT_SECONDS = new SimpleAttributeDefinitionBuilder("read-timeout-secs",
+            ModelType.INT)
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .setDefaultValue(new ModelNode(120)) /* e.g. bulk inserts may take long */
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
@@ -158,8 +149,6 @@ public interface StorageAttributes {
             TYPE,
             USERNAME,
             PASSWORD,
-            SECURITY_KEY,
-            SECURITY_SECRET,
             TENANT_ID,
             FEED_ID,
             URL,
@@ -170,6 +159,9 @@ public interface StorageAttributes {
             SERVER_OUTBOUND_SOCKET_BINDING_REF,
             INVENTORY_CONTEXT,
             METRICS_CONTEXT,
-            FEEDCOMM_CONTEXT
+            FEEDCOMM_CONTEXT,
+            CONNECT_TIMEOUT_SECONDS,
+            READ_TIMEOUT_SECONDS
     };
+
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,13 +18,14 @@ package org.hawkular.agent.monitor.extension;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 
 import org.jboss.as.controller.AttributeDefinition;
 import org.jboss.as.controller.PathElement;
 import org.jboss.as.controller.PersistentResourceDefinition;
 import org.jboss.as.controller.registry.OperationEntry.Flag;
 
-public class DMROperationDefinition extends PersistentResourceDefinition {
+public class DMROperationDefinition extends MonitorPersistentResourceDefinition {
 
     public static final DMROperationDefinition INSTANCE = new DMROperationDefinition();
 
@@ -43,5 +44,10 @@ public class DMROperationDefinition extends PersistentResourceDefinition {
     @Override
     public Collection<AttributeDefinition> getAttributes() {
         return Arrays.asList(DMROperationAttributes.ATTRIBUTES);
+    }
+
+    @Override
+    protected List<? extends PersistentResourceDefinition> getChildren() {
+        return Arrays.asList(DMROperationParamDefinition.INSTANCE);
     }
 }

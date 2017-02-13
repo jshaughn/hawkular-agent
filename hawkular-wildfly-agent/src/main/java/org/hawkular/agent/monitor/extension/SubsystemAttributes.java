@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +36,23 @@ public interface SubsystemAttributes {
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition API_JNDI = new SimpleAttributeDefinitionBuilder("apiJndiName",
+    SimpleAttributeDefinition IMMUTABLE = new SimpleAttributeDefinitionBuilder("immutable",
+            ModelType.BOOLEAN)
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(false))
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
+    SimpleAttributeDefinition IN_CONTAINER = new SimpleAttributeDefinitionBuilder("in-container",
+            ModelType.BOOLEAN)
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(false))
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
+    SimpleAttributeDefinition API_JNDI = new SimpleAttributeDefinitionBuilder("api-jndi-name",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setValidator(new StringLengthValidator(0, Integer.MAX_VALUE, true, true))
@@ -45,16 +61,24 @@ public interface SubsystemAttributes {
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition AUTO_DISCOVERY_SCAN_PERIOD_SECS = new SimpleAttributeDefinitionBuilder(
-            "autoDiscoveryScanPeriodSecs", ModelType.INT)
+    SimpleAttributeDefinition AUTO_DISCOVERY_SCAN_PERIOD_SECONDS = new SimpleAttributeDefinitionBuilder(
+            "auto-discovery-scan-period-secs", ModelType.INT)
                     .setAllowNull(true)
                     .setDefaultValue(new ModelNode(ProtocolServices.DEFAULT_AUTO_DISCOVERY_SCAN_PERIOD_SECS))
                     .setAllowExpression(true)
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
+    SimpleAttributeDefinition MIN_COLLECTION_INTERVAL_SECS = new SimpleAttributeDefinitionBuilder(
+            "min-collection-interval-secs", ModelType.INT)
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(30))
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
     SimpleAttributeDefinition NUM_DMR_SCHEDULER_THREADS = new SimpleAttributeDefinitionBuilder(
-            "numDmrSchedulerThreads", ModelType.INT)
+            "num-dmr-scheduler-threads", ModelType.INT)
                     .setAllowNull(true)
                     .setDefaultValue(new ModelNode(4))
                     .setAllowExpression(true)
@@ -62,7 +86,7 @@ public interface SubsystemAttributes {
                     .build();
 
     SimpleAttributeDefinition METRIC_DISPATCHER_BUFFER_SIZE = new SimpleAttributeDefinitionBuilder(
-            "metricDispatcherBufferSize", ModelType.INT)
+            "metric-dispatcher-buffer-size", ModelType.INT)
                     .setAllowNull(true)
                     .setDefaultValue(new ModelNode(SchedulerConfiguration.DEFAULT_METRIC_DISPATCHER_BUFFER_SIZE))
                     .setAllowExpression(true)
@@ -70,7 +94,7 @@ public interface SubsystemAttributes {
                     .build();
 
     SimpleAttributeDefinition METRIC_DISPATCHER_MAX_BATCH_SIZE = new SimpleAttributeDefinitionBuilder(
-            "metricDispatcherMaxBatchSize", ModelType.INT)
+            "metric-dispatcher-max-batch-size", ModelType.INT)
                     .setAllowNull(true)
                     .setDefaultValue(new ModelNode(SchedulerConfiguration.DEFAULT_METRIC_DISPATCHER_MAX_BATCH_SIZE))
                     .setAllowExpression(true)
@@ -78,7 +102,7 @@ public interface SubsystemAttributes {
                     .build();
 
     SimpleAttributeDefinition AVAIL_DISPATCHER_BUFFER_SIZE = new SimpleAttributeDefinitionBuilder(
-            "availDispatcherBufferSize", ModelType.INT)
+            "avail-dispatcher-buffer-size", ModelType.INT)
                     .setAllowNull(true)
                     .setDefaultValue(new ModelNode(SchedulerConfiguration.DEFAULT_AVAIL_DISPATCHER_BUFFER_SIZE))
                     .setAllowExpression(true)
@@ -86,21 +110,32 @@ public interface SubsystemAttributes {
                     .build();
 
     SimpleAttributeDefinition AVAIL_DISPATCHER_MAX_BATCH_SIZE = new SimpleAttributeDefinitionBuilder(
-            "availDispatcherMaxBatchSize", ModelType.INT)
+            "avail-dispatcher-max-batch-size", ModelType.INT)
                     .setAllowNull(true)
                     .setDefaultValue(new ModelNode(SchedulerConfiguration.DEFAULT_AVAIL_DISPATCHER_MAX_BATCH_SIZE))
                     .setAllowExpression(true)
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
+    SimpleAttributeDefinition PING_DISPATCHER_PERIOD_SECONDS = new SimpleAttributeDefinitionBuilder(
+            "ping-period-secs", ModelType.INT)
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(SchedulerConfiguration.DEFAULT_PING_DISPATCHER_PERIOD_SECONDS))
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
     AttributeDefinition[] ATTRIBUTES = {
             ENABLED,
+            IMMUTABLE,
+            IN_CONTAINER,
             API_JNDI,
-            AUTO_DISCOVERY_SCAN_PERIOD_SECS,
+            AUTO_DISCOVERY_SCAN_PERIOD_SECONDS,
+            MIN_COLLECTION_INTERVAL_SECS,
             NUM_DMR_SCHEDULER_THREADS,
             METRIC_DISPATCHER_BUFFER_SIZE,
             METRIC_DISPATCHER_MAX_BATCH_SIZE,
             AVAIL_DISPATCHER_BUFFER_SIZE,
-            AVAIL_DISPATCHER_MAX_BATCH_SIZE
+            AVAIL_DISPATCHER_MAX_BATCH_SIZE,
+            PING_DISPATCHER_PERIOD_SECONDS
     };
 }

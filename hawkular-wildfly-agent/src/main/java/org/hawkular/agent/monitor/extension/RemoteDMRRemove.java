@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,12 +16,37 @@
  */
 package org.hawkular.agent.monitor.extension;
 
-import org.jboss.as.controller.AbstractRemoveStepHandler;
+import org.hawkular.agent.monitor.protocol.ProtocolService;
+import org.hawkular.agent.monitor.scheduler.SchedulerService;
+import org.hawkular.agent.monitor.service.MonitorService;
+import org.hawkular.agent.monitor.util.WildflyCompatibilityUtils;
+import org.jboss.as.controller.OperationContext;
+import org.jboss.as.controller.OperationFailedException;
+import org.jboss.dmr.ModelNode;
 
-public class RemoteDMRRemove extends AbstractRemoveStepHandler {
+public class RemoteDMRRemove extends MonitorServiceRemoveStepHandler {
 
     public static final RemoteDMRRemove INSTANCE = new RemoteDMRRemove();
 
     private RemoteDMRRemove() {
+    }
+
+    @Override
+    protected void performRuntime(OperationContext context, ModelNode operation, ModelNode model)
+            throws OperationFailedException {
+
+        if (context.isBooting()) {
+            return;
+        }
+
+        MonitorService monitorService = getMonitorService(context);
+        if (monitorService == null) {
+            return; // the agent wasn't enabled, nothing to do
+        }
+
+        SchedulerService schedulerService = monitorService.getSchedulerService();
+        ProtocolService<?, ?> dmrService = monitorService.getProtocolServices().getDmrProtocolService();
+        String doomedEndpointName = WildflyCompatibilityUtils.getCurrentAddressValue(context, operation);
+        dmrService.remove(doomedEndpointName, schedulerService);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.hawkular.agent.monitor.inventory.TypeSet.TypeSetBuilder;
 import org.hawkular.agent.monitor.log.AgentLoggers;
 import org.hawkular.agent.monitor.log.MsgLogger;
 import org.jgrapht.alg.DirectedNeighborIndex;
@@ -48,6 +49,30 @@ public final class ResourceTypeManager<L> {
     private final ListenableDirectedGraph<ResourceType<L>, DefaultEdge> resourceTypesGraph;
     private final DirectedNeighborIndex<ResourceType<L>, DefaultEdge> index;
     private final Map<Name, TypeSet<ResourceType<L>>> typeSetMap;
+
+    /**
+     * A simpler constructor that accepts a simple collection of all resource types that will be stored
+     * in this type manager.
+     *
+     * @param allTypes all types contained in this manager
+     */
+    public ResourceTypeManager(Collection<ResourceType<L>> allTypes) {
+        this(buildTypeMapForConstructor(allTypes), null);
+    }
+
+    // for use by the above constructor
+    private static <L> Map<Name, TypeSet<ResourceType<L>>> buildTypeMapForConstructor(
+            Collection<ResourceType<L>> allTypes) {
+        TypeSetBuilder<ResourceType<L>> bldr = TypeSet.<ResourceType<L>> builder();
+        bldr.enabled(true);
+        bldr.name(new Name("all"));
+        for (ResourceType<L> type : allTypes) {
+            bldr.type(type);
+        }
+        TypeSet<ResourceType<L>> typeSet = bldr.build();
+
+        return Collections.singletonMap(typeSet.getName(), typeSet);
+    }
 
     /**
      * Adds the given types to the manager, building a graph to represent the type hierarchy.
@@ -106,7 +131,11 @@ public final class ResourceTypeManager<L> {
         Set<ResourceType<L>> allTypes = resourceTypesGraph.vertexSet();
         for (ResourceType<L> type : allTypes) {
             if (index.predecessorsOf(type).isEmpty()) {
-                roots.add(type);
+                if (type.getParents().isEmpty()) {
+                    roots.add(type);
+                } else {
+                    log.errorInvalidRootResourceType(type.getID().getIDString(), type.getParents());
+                }
             }
         }
         return Collections.unmodifiableSet(roots);
@@ -167,10 +196,10 @@ public final class ResourceTypeManager<L> {
                 for (Name parent : rType.getParents()) {
                     ResourceType<L> parentResourceType = allResourceTypes.get(parent);
                     if (parentResourceType == null) {
-                        throw new IllegalStateException("Resource type [" + rType.getName()
-                                + "] has an unknown parent [" + parent + "]");
+                        log.debugf("Resource type [%s] will ignore unknown parent [%s]", rType.getName(), parent);
+                    } else {
+                        resourceTypesGraph.addEdge(parentResourceType, rType);
                     }
-                    resourceTypesGraph.addEdge(parentResourceType, rType);
                 }
             }
         }

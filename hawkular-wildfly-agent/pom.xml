@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+    Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
     and other contributors as indicated by the @author tags.
 
     Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +23,7 @@
   <parent>
     <groupId>org.hawkular.agent</groupId>
     <artifactId>hawkular-wildfly-agent-parent</artifactId>
-    <version>0.17.3.Final-SNAPSHOT</version>
+    <version>0.26.1.Final-SNAPSHOT</version>
   </parent>
 
   <artifactId>hawkular-wildfly-agent</artifactId>
@@ -35,17 +35,17 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-core</artifactId>
-      <scope>provided</scope>
+      <scope>provided</scope> <!-- this is only provided on later WildFly/EAP versions - EAP 6 is not provided -->
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-      <scope>provided</scope>
+      <scope>provided</scope> <!-- this is only provided on later WildFly/EAP versions - EAP 6 is not provided -->
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-annotations</artifactId>
-      <scope>provided</scope>
+      <scope>provided</scope> <!-- this is only provided on later WildFly/EAP versions - EAP 6 is not provided -->
     </dependency>
 
     <dependency>
@@ -54,12 +54,12 @@
     </dependency>
 
     <dependency>
-      <groupId>com.squareup.okhttp</groupId>
+      <groupId>com.squareup.okhttp3</groupId>
       <artifactId>okhttp</artifactId>
     </dependency>
 
     <dependency>
-      <groupId>com.squareup.okhttp</groupId>
+      <groupId>com.squareup.okhttp3</groupId>
       <artifactId>okhttp-ws</artifactId>
     </dependency>
 
@@ -75,7 +75,7 @@
     </dependency>
 
     <dependency>
-      <groupId>org.hawkular.cmdgw</groupId>
+      <groupId>org.hawkular.commons</groupId>
       <artifactId>hawkular-command-gateway-api</artifactId>
     </dependency>
 
@@ -86,14 +86,18 @@
     </dependency>
 
     <dependency>
-      <groupId>org.hawkular.agent</groupId>
-      <artifactId>prometheus-scraper</artifactId>
-      <version>${project.version}</version>
+      <groupId>org.hawkular.commons</groupId>
+      <artifactId>hawkular-bus-common</artifactId>
     </dependency>
 
     <dependency>
       <groupId>org.hawkular.commons</groupId>
-      <artifactId>hawkular-bus-common</artifactId>
+      <artifactId>hawkular-inventory-paths</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.hawkular.inventory</groupId>
+      <artifactId>hawkular-inventory-api</artifactId>
     </dependency>
 
     <dependency>
@@ -109,6 +113,12 @@
     <dependency>
       <groupId>org.jboss.logging</groupId>
       <artifactId>jboss-logging</artifactId>
+      <!-- We need to hardcode this version to ensure that calls like LOG.debugf("x", 1) don't link to
+      void debugf(String format, int arg);
+      Thus breaking compatibility with EAP6 which doesn't have said method.
+      Instead we use 3.1.4.GA to ensure it uses void debugf(String format, Object param1); which is provided
+      on both EAP6 and EAP7 see: https://github.com/hawkular/hawkular-agent/pull/271#discussion_r97190787 -->
+      <version>3.1.4.GA</version>
       <scope>provided</scope>
     </dependency>
 

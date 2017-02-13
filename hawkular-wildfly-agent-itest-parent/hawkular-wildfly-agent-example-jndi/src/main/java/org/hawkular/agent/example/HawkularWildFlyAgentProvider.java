@@ -16,11 +16,22 @@
  */
 package org.hawkular.agent.example;
 
+import java.util.Arrays;
+import java.util.List;
+
 import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
 import javax.ejb.Singleton;
 
+import org.hawkular.agent.monitor.api.Avail;
+import org.hawkular.agent.monitor.api.AvailDataPayloadBuilder;
+import org.hawkular.agent.monitor.api.AvailStorage;
+import org.hawkular.agent.monitor.api.DiscoveryEvent;
 import org.hawkular.agent.monitor.api.HawkularWildFlyAgentContext;
+import org.hawkular.agent.monitor.api.InventoryEvent;
+import org.hawkular.agent.monitor.api.MetricDataPayloadBuilder;
+import org.hawkular.agent.monitor.api.MetricStorage;
+import org.hawkular.agent.monitor.inventory.Resource;
+import org.hawkular.metrics.client.common.MetricType;
 import org.jboss.logging.Logger;
 
 /**
@@ -31,10 +42,13 @@ public class HawkularWildFlyAgentProvider {
     private static final Logger log = Logger.getLogger(HawkularWildFlyAgentProvider.class);
     private static final String AGENT_JNDI = "java:global/hawkular/agent/api";
 
-    @Resource(name = AGENT_JNDI)
+    static final String TENANT_ID = null; // reuse the agent's global tenant
+
+    @javax.annotation.Resource(name = AGENT_JNDI)
     private HawkularWildFlyAgentContext hawkularAgent;
 
     private MyAppSamplingService myAppSamplingService;
+    private MyAppInventory myAppInventory;
 
     @PostConstruct
     public void postConstruct() {
@@ -43,24 +57,112 @@ public class HawkularWildFlyAgentProvider {
         }
 
         myAppSamplingService = new MyAppSamplingService();
+        myAppInventory = new MyAppInventory();
     }
 
-    public HawkularWildFlyAgentContext getHawkularWildFlyAgent() throws UnsupportedOperationException {
+    /**
+     * Given a metric identifier and the metric data value, this writes the data to Hawkular.
+     * @param metricKey identifies the metric
+     * @param metricValue the value of the metric
+     * @param metricType the type of metric (e.g. gauge or counter)
+     */
+    public void sendMetric(String metricKey, Double metricValue, MetricType metricType) {
+        HawkularWildFlyAgentContext hawkularWildFlyAgent = getHawkularWildFlyAgent();
+        MetricStorage metricStorage = hawkularWildFlyAgent.getMetricStorage();
+
+        MetricDataPayloadBuilder payloadBuilder = metricStorage.createMetricDataPayloadBuilder();
+        payloadBuilder.addDataPoint(metricKey, System.currentTimeMillis(), metricValue, metricType);
+        payloadBuilder.setTenantId(TENANT_ID);
+        metricStorage.store(payloadBuilder, 0);
+    }
+
+    /**
+     * Given a metric identifier and the metric data value, this writes the data to Hawkular.
+     * @param metricKey identifies the metric
+     * @param metricValue the string value of the metric
+     */
+    public void sendStringMetric(String metricKey, String metricValue) {
+        HawkularWildFlyAgentContext hawkularWildFlyAgent = getHawkularWildFlyAgent();
+        MetricStorage metricStorage = hawkularWildFlyAgent.getMetricStorage();
+
+        MetricDataPayloadBuilder payloadBuilder = metricStorage.createMetricDataPayloadBuilder();
+        payloadBuilder.addDataPoint(metricKey, System.currentTimeMillis(), metricValue);
+        payloadBuilder.setTenantId(TENANT_ID);
+        metricStorage.store(payloadBuilder, 0);
+    }
+
+    /**
+     * Given an availability identifier and the avail data value, this writes the data to Hawkular.
+     * @param availKey identifies the availability metric
+     * @param availValue the value of the availability
+     */
+    public void sendAvail(String availKey, Avail availValue) {
+        HawkularWildFlyAgentContext hawkularWildFlyAgent = getHawkularWildFlyAgent();
+        AvailStorage availStorage = hawkularWildFlyAgent.getAvailStorage();
+
+        AvailDataPayloadBuilder payloadBuilder = availStorage.createAvailDataPayloadBuilder();
+        payloadBuilder.addDataPoint(availKey, System.currentTimeMillis(), availValue);
+        payloadBuilder.setTenantId(TENANT_ID);
+        availStorage.store(payloadBuilder, 0);
+    }
+
+    /**
+     * This will add the resource to the internal inventory and persist the full inventory to hawkular.
+     *
+     * @param resourceId the new resource ID
+     */
+    public void addResourceToInventory(String resourceId) {
+        Resource<MyAppNodeLocation> newResource = myAppInventory.getResource(resourceId);
+        if (newResource != null) {
+            throw new RuntimeException("Cannot add an already known resource: " + newResource);
+        }
+        newResource = myAppInventory.instantiateResource(resourceId);
+
+        myAppInventory.addResource(newResource);
+
+        List<Resource<MyAppNodeLocation>> resources = Arrays.asList(newResource);
+        InventoryEvent<MyAppNodeLocation> iEvent = new InventoryEvent<>(myAppSamplingService, resources);
+        getHawkularWildFlyAgent().getInventoryStorage().resourcesAdded(iEvent);
+
+        // we want to persist this - since we only added one, we can tell the
+        // system our "discovery" is done now and our inventory has been updated
+        DiscoveryEvent<MyAppNodeLocation> dEvent;
+        dEvent = new DiscoveryEvent<>(myAppSamplingService, myAppInventory.getResourceManager(),
+                myAppInventory.getResourceTypeManager());
+        getHawkularWildFlyAgent().getInventoryStorage().discoveryCompleted(dEvent);
+    }
+
+    /**
+     * This will remove the resource from the internal inventory and persist the full inventory to hawkular.
+     *
+     * @param resource the resource to remove
+     */
+    public void removeResourceFromInventory(String doomedResourceId) {
+        Resource<MyAppNodeLocation> doomedResource = myAppInventory.getResource(doomedResourceId);
+        if (doomedResource == null) {
+            throw new RuntimeException("Cannot remove unknown resource: " + doomedResource);
+        }
+
+        myAppInventory.removeResource(doomedResource);
+
+        List<Resource<MyAppNodeLocation>> resources = Arrays.asList(doomedResource);
+        InventoryEvent<MyAppNodeLocation> iEvent = new InventoryEvent<>(myAppSamplingService, resources);
+        getHawkularWildFlyAgent().getInventoryStorage().resourcesRemoved(iEvent);
+
+        // we want to persist this - since we only removed one, we can tell the
+        // system our "discovery" is done now and our inventory has been updated
+        DiscoveryEvent<MyAppNodeLocation> dEvent;
+        dEvent = new DiscoveryEvent<>(myAppSamplingService, myAppInventory.getResourceManager(),
+                myAppInventory.getResourceTypeManager());
+        getHawkularWildFlyAgent().getInventoryStorage().discoveryCompleted(dEvent);
+    }
+
+    private HawkularWildFlyAgentContext getHawkularWildFlyAgent() throws UnsupportedOperationException {
         if (hawkularAgent == null) {
             throw new UnsupportedOperationException(
                     "The Hawkular WildFly Agent is either disabled or not deployed "
                             + "and thus is not available for use.");
         }
         return hawkularAgent;
-    }
-
-    /**
-     * This is the sampling service that the Hawkular WildFly Agent will use to request us
-     * to perform metric collection and availability checking.
-     *
-     * @return sampling service
-     */
-    public MyAppSamplingService getSamplingService() {
-        return this.myAppSamplingService;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 
 import org.hawkular.agent.monitor.log.AgentLoggers;
 import org.hawkular.agent.monitor.log.MsgLogger;
@@ -172,6 +173,32 @@ public final class ResourceManager<L> {
     }
 
     /**
+     * @return the total number of resources currently in the graph.
+     */
+    public int size() {
+        return resourceCache.size();
+    }
+
+    /**
+     * @return the total number of resources currently in the graph relative to the given resource (that is,
+     *         it counts that resource and all of its descendants).
+     */
+    public int size(Resource<L> relativeTo) {
+        graphLockRead.lock();
+        try {
+            if (getResource(relativeTo.getID()) == null) {
+                return 0; // the resource doesn't even exist
+            } else {
+                List<Resource<L>> descendants = new ArrayList<>();
+                getAllDescendants(relativeTo, descendants);
+                return 1 + descendants.size();
+            }
+        } finally {
+            graphLockRead.unlock();
+        }
+    }
+
+    /**
      * Adds the given resource to the resource hierarchy, replacing the resource if it already exist but
      * has changed.
      *
@@ -207,7 +234,7 @@ public final class ResourceManager<L> {
                 if (parentInGraph == null) {
                     throw new IllegalArgumentException(
                             String.format("The new resource [%s] has a parent [%s] that has not been added yet",
-                            newResource, newResource.getParent()));
+                                    newResource, newResource.getParent()));
                 }
 
                 // if parents are not the same instance, create a new resource with the parent we have in the graph
@@ -245,6 +272,28 @@ public final class ResourceManager<L> {
 
             return result;
 
+        } finally {
+            graphLockWrite.unlock();
+        }
+    }
+
+    /**
+     * Remove the resource from {@link #resourcesGraph}, including all its descendants.
+     *
+     * @param doomedResource the resource to remove
+     * @return an unmodifiable list of {@link Resources} that were removed by this method
+     */
+    public List<Resource<L>> removeResource(Resource<L> doomedResource) {
+        graphLockWrite.lock();
+        try {
+            List<Resource<L>> removedResources = new ArrayList<Resource<L>>();
+            Resource<L> resourceToRemove = getResource(doomedResource.getID());
+            if (resourceToRemove != null) {
+                getAllDescendants(resourceToRemove, removedResources);
+                removedResources.add(resourceToRemove);
+                removedResources.forEach(r -> this.resourcesGraph.removeVertex(r));
+            }
+            return Collections.unmodifiableList(removedResources);
         } finally {
             graphLockWrite.unlock();
         }
@@ -346,7 +395,7 @@ public final class ResourceManager<L> {
 
             Set<Resource<L>> roots = getRootResources();
             if (roots.isEmpty()) {
-                throw new IllegalStateException("There are no root nodes; cannot traverse");
+                return Collections.emptyList();
             }
 
             // loop over each root resource and traverse their tree hierarchy breadth-first
@@ -361,6 +410,29 @@ public final class ResourceManager<L> {
             }
 
             return Collections.unmodifiableList(result);
+        } finally {
+            graphLockRead.unlock();
+        }
+    }
+
+    /**
+     * @param filter if not null, any resources whose IDs are in here will not exist in the returned collection
+     * @return a list of the resources in this resource manager masked by the given IDs
+     *         (that is, if an ID in this resource manager matches an ID found in the filter collection,
+     *         the resource whose ID it is will not be found in the returned collection).
+     *         DO NOT THINK THIS RETURNS ONLY THOSE RESOURCES WHOSE IDS MATCH THOSE IN FILTER, IT IS THE OPPOSITE.
+     */
+    public List<Resource<L>> getAllResources(Collection<ID> filter) {
+        graphLockRead.lock();
+        try {
+            Set<ID> resultIds = new HashSet<>(this.resourceCache.keySet());
+            if (filter != null) {
+                resultIds.removeAll(filter);
+            }
+            return resultIds
+                    .stream()
+                    .map(i -> getResource(i))
+                    .collect(Collectors.toList());
         } finally {
             graphLockRead.unlock();
         }

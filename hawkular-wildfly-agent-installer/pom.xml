@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+    Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
     and other contributors as indicated by the @author tags.
 
     Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +23,7 @@
   <parent>
     <groupId>org.hawkular.agent</groupId>
     <artifactId>hawkular-wildfly-agent-parent</artifactId>
-    <version>0.17.3.Final-SNAPSHOT</version>
+    <version>0.26.1.Final-SNAPSHOT</version>
   </parent>
 
   <artifactId>hawkular-wildfly-agent-installer</artifactId>
@@ -71,10 +71,12 @@
             <argument>--target-location=${org.hawkular.wildfly.home}</argument>
             <argument>--module-dist=${project.basedir}/../hawkular-wildfly-agent-wf-extension/target/hawkular-wildfly-agent-wf-extension-${project.version}.zip</argument>
             <argument>--server-url=http://127.0.0.1:8080</argument>
+            <argument>--username=jdoe</argument>
+            <argument>--password=password</argument>
             <argument>--enabled=true</argument>
             <!--
-            <argument>-target-config=domain/configuration/host.xml</argument>
-            <argument>-target-config=domain/configuration/domain.xml</argument>
+            <argument>- -target-config=domain/configuration/host.xml</argument>
+            <argument>- -target-config=domain/configuration/domain.xml</argument>
             -->
           </arguments>
           <systemProperties>
@@ -145,10 +147,12 @@
                 <argument>--target-location=${org.hawkular.wildfly.home}</argument>
                 <argument>--module-dist=${project.basedir}/../hawkular-wildfly-agent-wf-extension/target/hawkular-wildfly-agent-wf-extension-${project.version}.zip</argument>
                 <argument>--server-url=http://127.0.0.1:8080</argument>
+                <argument>--username=jdoe</argument>
+                <argument>--password=password</argument>
                 <argument>--enabled=true</argument>
                 <!--
-                <argument>-target-config=domain/configuration/domain.xml</argument>
-                <argument>-target-config=domain/configuration/host.xml</argument>
+                <argument>- -target-config=domain/configuration/host.xml</argument>
+                <argument>- -target-config=domain/configuration/domain.xml</argument>
                 -->
               </arguments>
             </configuration>

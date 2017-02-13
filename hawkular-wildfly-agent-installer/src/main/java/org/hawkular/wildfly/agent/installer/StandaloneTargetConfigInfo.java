@@ -33,4 +33,21 @@ public class StandaloneTargetConfigInfo implements TargetConfigInfo {
         return getRootXPath() + "/profile";
     }
 
+    @Override
+    public String getManagedServerResourceTypeSets() {
+        return new StringBuilder()
+                .append("Standalone Environment,")
+                .append("Deployment,")
+                .append("Web Component,")
+                .append("EJB,")
+                .append("Datasource,")
+                .append("XA Datasource,")
+                .append("JDBC Driver,")
+                .append("Transaction Manager,")
+                .append("Messaging,")
+                .append("Socket Binding Group,")
+                .append("Clustering,")
+                .append("Hawkular")
+                .toString();
+    }
 }

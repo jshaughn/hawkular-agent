@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,13 +23,15 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration;
 import org.hawkular.agent.monitor.log.AgentLoggers;
 import org.hawkular.agent.monitor.log.MsgLogger;
 import org.hawkular.agent.monitor.service.MonitorService;
-import org.hawkular.agent.monitor.storage.HttpClientBuilder;
 import org.hawkular.agent.monitor.util.Util;
 import org.hawkular.bus.common.BasicMessage;
 import org.hawkular.bus.common.BasicMessageWithExtraData;
@@ -40,14 +42,15 @@ import org.hawkular.cmdgw.api.Authentication;
 import org.hawkular.cmdgw.api.GenericErrorResponse;
 import org.hawkular.cmdgw.api.GenericErrorResponseBuilder;
 
-import com.squareup.okhttp.Response;
-import com.squareup.okhttp.ws.WebSocket;
-import com.squareup.okhttp.ws.WebSocketCall;
-import com.squareup.okhttp.ws.WebSocketListener;
-
+import okhttp3.MediaType;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import okhttp3.ws.WebSocket;
+import okhttp3.ws.WebSocketCall;
+import okhttp3.ws.WebSocketListener;
 import okio.Buffer;
 import okio.BufferedSink;
-import okio.BufferedSource;
 
 public class FeedCommProcessor implements WebSocketListener {
     private static final MsgLogger log = AgentLoggers.getLogger(FeedCommProcessor.class);
@@ -55,43 +58,52 @@ public class FeedCommProcessor implements WebSocketListener {
 
     static {
         VALID_COMMANDS = new HashMap<>();
-        VALID_COMMANDS.put(EchoCommand.REQUEST_CLASS.getName(), EchoCommand.class);
-        VALID_COMMANDS.put(GenericErrorResponseCommand.REQUEST_CLASS.getName(), GenericErrorResponseCommand.class);
-        VALID_COMMANDS.put(ExecuteOperationCommand.REQUEST_CLASS.getName(), ExecuteOperationCommand.class);
-        VALID_COMMANDS.put(DeployApplicationCommand.REQUEST_CLASS.getName(), DeployApplicationCommand.class);
-        VALID_COMMANDS.put(AddJdbcDriverCommand.REQUEST_CLASS.getName(), AddJdbcDriverCommand.class);
         VALID_COMMANDS.put(AddDatasourceCommand.REQUEST_CLASS.getName(), AddDatasourceCommand.class);
+        VALID_COMMANDS.put(AddJdbcDriverCommand.REQUEST_CLASS.getName(), AddJdbcDriverCommand.class);
+        VALID_COMMANDS.put(DeployApplicationCommand.REQUEST_CLASS.getName(), DeployApplicationCommand.class);
+        VALID_COMMANDS.put(DisableApplicationCommand.REQUEST_CLASS.getName(), DisableApplicationCommand.class);
+        VALID_COMMANDS.put(EchoCommand.REQUEST_CLASS.getName(), EchoCommand.class);
+        VALID_COMMANDS.put(EnableApplicationCommand.REQUEST_CLASS.getName(), EnableApplicationCommand.class);
+        VALID_COMMANDS.put(ExecuteOperationCommand.REQUEST_CLASS.getName(), ExecuteOperationCommand.class);
         VALID_COMMANDS.put(ExportJdrCommand.REQUEST_CLASS.getName(), ExportJdrCommand.class);
+        VALID_COMMANDS.put(GenericErrorResponseCommand.REQUEST_CLASS.getName(), GenericErrorResponseCommand.class);
         VALID_COMMANDS.put(RemoveDatasourceCommand.REQUEST_CLASS.getName(), RemoveDatasourceCommand.class);
         VALID_COMMANDS.put(RemoveJdbcDriverCommand.REQUEST_CLASS.getName(), RemoveJdbcDriverCommand.class);
-        VALID_COMMANDS.put(UpdateDatasourceCommand.REQUEST_CLASS.getName(), UpdateDatasourceCommand.class);
+        VALID_COMMANDS.put(RestartApplicationCommand.REQUEST_CLASS.getName(), RestartApplicationCommand.class);
         VALID_COMMANDS.put(StatisticsControlCommand.REQUEST_CLASS.getName(), StatisticsControlCommand.class);
+        VALID_COMMANDS.put(UndeployApplicationCommand.REQUEST_CLASS.getName(), UndeployApplicationCommand.class);
+        VALID_COMMANDS.put(UpdateDatasourceCommand.REQUEST_CLASS.getName(), UpdateDatasourceCommand.class);
+        VALID_COMMANDS.put(UpdateCollectionIntervalsCommand.REQUEST_CLASS.getName(),
+                UpdateCollectionIntervalsCommand.class);
     }
 
     private final int disconnectCode = 1000;
     private final String disconnectReason = "Shutting down FeedCommProcessor";
 
-    private final HttpClientBuilder httpClientBuilder;
+    private final WebSocketClientBuilder webSocketClientBuilder;
     private final MonitorServiceConfiguration config;
     private final MonitorService discoveryService;
     private final String feedcommUrl;
     private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService pingExecutor = Executors.newScheduledThreadPool(1);
     private final AtomicReference<ReconnectJobThread> reconnectJobThread = new AtomicReference<>();
 
     private WebSocketCall webSocketCall;
     private WebSocket webSocket;
 
+    private ScheduledFuture<?> pingFuture;
+
     // if this is true, this object should never reconnect
     private boolean destroyed = false;
 
-    public FeedCommProcessor(HttpClientBuilder httpClientBuilder, MonitorServiceConfiguration config, String feedId,
-            MonitorService discoveryService) {
+    public FeedCommProcessor(WebSocketClientBuilder webSocketClientBuilder, MonitorServiceConfiguration config,
+            String feedId, MonitorService discoveryService) {
 
         if (feedId == null || feedId.isEmpty()) {
             throw new IllegalArgumentException("Must have a valid feed ID to communicate with the server");
         }
 
-        this.httpClientBuilder = httpClientBuilder;
+        this.webSocketClientBuilder = webSocketClientBuilder;
         this.config = config;
         this.discoveryService = discoveryService;
 
@@ -122,7 +134,7 @@ public class FeedCommProcessor implements WebSocketListener {
      * @throws Exception on failure
      */
     public void connect() throws Exception {
-        disconnect(); // disconnect to any old connection we had
+        disconnect(); // disconnect from any old connection we had
 
         if (destroyed) {
             return;
@@ -130,16 +142,23 @@ public class FeedCommProcessor implements WebSocketListener {
 
         log.debugf("About to connect a feed WebSocket client to endpoint [%s]", feedcommUrl);
 
-        webSocketCall = httpClientBuilder.createWebSocketCall(feedcommUrl, null);
+        webSocketCall = webSocketClientBuilder.createWebSocketCall(feedcommUrl, null);
         webSocketCall.enqueue(this);
     }
 
+    /**
+     * Performs a graceful disconnect with the {@link #disconnectCode} and {@link #disconnectReason}.
+     */
     public void disconnect() {
+        disconnect(disconnectCode, disconnectReason);
+    }
+
+    private void disconnect(int code, String reason) {
         if (webSocket != null) {
             try {
-                webSocket.close(disconnectCode, disconnectReason);
+                webSocket.close(code, reason);
             } catch (Exception e) {
-                log.warnFailedToCloseWebSocket(disconnectCode, disconnectReason, e);
+                log.warnFailedToCloseWebSocket(code, reason, e);
             }
             webSocket = null;
         }
@@ -158,16 +177,18 @@ public class FeedCommProcessor implements WebSocketListener {
      * Call this when you know this processor object will never be used again.
      */
     public void destroy() {
+        log.debugf("Destroying FeedCommProcessor");
         this.destroyed = true;
         stopReconnectJobThread();
         disconnect();
+        destroyPingExecutor();
     }
 
     /**
      * Sends a message to the server asynchronously. This method returns immediately; the message may not go out until
      * some time in the future.
      *
-     * @param message the message to send
+     * @param messageWithData the message to send
      */
     public void sendAsync(BasicMessageWithExtraData<? extends BasicMessage> messageWithData) {
         if (webSocket == null) {
@@ -183,19 +204,27 @@ public class FeedCommProcessor implements WebSocketListener {
                 try {
                     if (messageWithData.getBinaryData() == null) {
                         String messageString = ApiDeserializer.toHawkularFormat(message);
-                        Buffer buffer = new Buffer();
-                        buffer.writeUtf8(messageString);
-                        FeedCommProcessor.this.webSocket.sendMessage(WebSocket.PayloadType.TEXT, buffer);
+                        @SuppressWarnings("resource")
+                        Buffer buffer = new Buffer().writeUtf8(messageString);
+                        RequestBody requestBody = RequestBody.create(WebSocket.TEXT, buffer.readByteArray());
+                        FeedCommProcessor.this.webSocket.sendMessage(requestBody);
                     } else {
                         BinaryData messageData = ApiDeserializer.toHawkularFormat(message,
                                 messageWithData.getBinaryData());
-                        BufferedSink sink = FeedCommProcessor.this.webSocket
-                                .newMessageSink(WebSocket.PayloadType.BINARY);
-                        try {
-                            emitToSink(messageData, sink);
-                        } finally {
-                            sink.close();
-                        }
+
+                        RequestBody requestBody = new RequestBody() {
+                            @Override
+                            public MediaType contentType() {
+                                return WebSocket.BINARY;
+                            }
+
+                            @Override
+                            public void writeTo(BufferedSink bufferedSink) throws IOException {
+                                emitToSink(messageData, bufferedSink);
+                            }
+                        };
+
+                        FeedCommProcessor.this.webSocket.sendMessage(requestBody);
                     }
                 } catch (Throwable t) {
                     log.errorFailedToSendOverFeedComm(message.getClass().getName(), t);
@@ -207,7 +236,7 @@ public class FeedCommProcessor implements WebSocketListener {
     /**
      * Sends a message to the server synchronously. This will return only when the message has been sent.
      *
-     * @param message the message to send
+     * @param messageWithData the message to send
      * @throws IOException if the message failed to be sent
      */
     public void sendSync(BasicMessageWithExtraData<? extends BasicMessage> messageWithData) throws Exception {
@@ -220,17 +249,27 @@ public class FeedCommProcessor implements WebSocketListener {
 
         if (messageWithData.getBinaryData() == null) {
             String messageString = ApiDeserializer.toHawkularFormat(message);
-            Buffer buffer = new Buffer();
-            buffer.writeUtf8(messageString);
-            FeedCommProcessor.this.webSocket.sendMessage(WebSocket.PayloadType.TEXT, buffer);
+            @SuppressWarnings("resource")
+            Buffer buffer = new Buffer().writeUtf8(messageString);
+            RequestBody requestBody = RequestBody.create(WebSocket.TEXT, buffer.readByteArray());
+            FeedCommProcessor.this.webSocket.sendMessage(requestBody);
         } else {
             BinaryData messageData = ApiDeserializer.toHawkularFormat(message, messageWithData.getBinaryData());
-            BufferedSink sink = FeedCommProcessor.this.webSocket.newMessageSink(WebSocket.PayloadType.BINARY);
-            try {
-                emitToSink(messageData, sink);
-            } finally {
-                sink.close();
-            }
+
+            RequestBody requestBody = new RequestBody() {
+                @Override
+                public MediaType contentType() {
+                    return WebSocket.BINARY;
+                }
+
+                @Override
+                public void writeTo(BufferedSink bufferedSink) throws IOException {
+                    emitToSink(messageData, bufferedSink);
+                }
+            };
+
+            FeedCommProcessor.this.webSocket.sendMessage(requestBody);
+
         }
     }
 
@@ -250,13 +289,22 @@ public class FeedCommProcessor implements WebSocketListener {
 
     @Override
     public void onOpen(WebSocket webSocket, Response response) {
-        this.webSocket = webSocket;
+        if (response != null && response.body() != null) {
+            try {
+                response.body().close();
+            } catch (Exception ignore) {
+            }
+        }
+
         stopReconnectJobThread();
+        this.webSocket = webSocket;
+        startPinging();
         log.infoOpenedFeedComm(feedcommUrl);
     }
 
     @Override
     public void onClose(int reasonCode, String reason) {
+        stopPinging();
         webSocket = null;
         log.infoClosedFeedComm(feedcommUrl, reasonCode, reason);
 
@@ -280,18 +328,37 @@ public class FeedCommProcessor implements WebSocketListener {
     @Override
     public void onFailure(IOException e, Response response) {
         if (response == null) {
-            // don't flood the log with these at the WARN level - its probably just because the server is down
-            // and we can't reconnect - while the server is down, our reconnect logic will cause this error
-            // to occur periodically. Our reconnect logic will log other messages.
-            log.tracef("Feed communications had a failure - a reconnection is likely required: %s", e);
+            if (e instanceof java.net.ConnectException) {
+                // don't flood the log with these at the WARN level - its probably just because the server is down
+                // and we can't reconnect - while the server is down, our reconnect logic will cause this error
+                // to occur periodically. Our reconnect logic will log other messages.
+                log.tracef("Feed communications had a failure - a reconnection is likely required: %s", e);
+            } else if (e.getMessage() != null && e.getMessage().toLowerCase().contains("socket closed")) {
+                log.debugf("Feed communications channel has been shutdown: " + e);
+            } else {
+                log.warnFeedCommFailure("<null>", e);
+            }
         } else {
             log.warnFeedCommFailure(response.toString(), e);
+            if (response.body() != null) {
+                try {
+                    response.body().close();
+                } catch (Exception ignore) {
+                }
+            }
+        }
+
+        // refresh our connection in case the network dropped our connection and onClose wasn't called
+        if (reconnectJobThread.get() == null) {
+            stopPinging();
+            disconnect();
+            startReconnectJobThread();
         }
     }
 
     @Override
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    public void onMessage(BufferedSource payload, WebSocket.PayloadType payloadType) throws IOException {
+    public void onMessage(ResponseBody responseBody) throws IOException {
 
         BasicMessageWithExtraData<? extends BasicMessage> response;
         String requestClassName = "?";
@@ -300,21 +367,15 @@ public class FeedCommProcessor implements WebSocketListener {
             try {
                 BasicMessageWithExtraData<? extends BasicMessage> msgWithData;
 
-                switch (payloadType) {
-                    case TEXT: {
-                        String nameAndJsonStr = payload.readUtf8();
-                        msgWithData = new ApiDeserializer().deserialize(nameAndJsonStr);
-                        break;
-                    }
-                    case BINARY: {
-                        InputStream input = payload.inputStream();
-                        msgWithData = new ApiDeserializer().deserialize(input);
-                        break;
-                    }
-                    default: {
-                        throw new IllegalArgumentException(
-                                "Unknown payload type, please report this bug: " + payloadType);
-                    }
+                if (responseBody.contentType().equals(WebSocket.TEXT)) {
+                    String nameAndJsonStr = responseBody.string();
+                    msgWithData = new ApiDeserializer().deserialize(nameAndJsonStr);
+                } else if (responseBody.contentType().equals(WebSocket.BINARY)) {
+                    InputStream input = responseBody.byteStream();
+                    msgWithData = new ApiDeserializer().deserialize(input);
+                } else {
+                    throw new IllegalArgumentException(
+                            "Unknown mediatype type, please report this bug: " + responseBody.contentType());
                 }
 
                 log.debug("Received message from server");
@@ -335,8 +396,8 @@ public class FeedCommProcessor implements WebSocketListener {
                     response = command.execute(msgWithData, context);
                 }
             } finally {
-                // must ensure payload is closed; this assumes if it was a stream that the command is finished with it
-                payload.close();
+                // must ensure response is closed; this assumes if it was a stream that the command is finished with it
+                responseBody.close();
             }
         } catch (Throwable t) {
             log.errorCommandExecutionFailureFeed(requestClassName, t);
@@ -358,7 +419,13 @@ public class FeedCommProcessor implements WebSocketListener {
 
     @Override
     public void onPong(Buffer buffer) {
-        // no-op
+        try {
+            if (!buffer.equals(createPingBuffer())) {
+                log.debugf("Failed to verify WebSocket pong [%s]", buffer.toString());
+            }
+        } finally {
+            buffer.close();
+        }
     }
 
     private void configurationAuthentication(BasicMessage message) {
@@ -374,14 +441,8 @@ public class FeedCommProcessor implements WebSocketListener {
         }
 
         auth = new Authentication();
-        if (this.config.getStorageAdapter().getSecurityKey() != null) {
-            // rather than use an actual username and password, we will use the offline token identified by key/secret
-            auth.setUsername(this.config.getStorageAdapter().getSecurityKey());
-            auth.setPassword(this.config.getStorageAdapter().getSecuritySecret());
-        } else {
-            auth.setUsername(this.config.getStorageAdapter().getUsername());
-            auth.setPassword(this.config.getStorageAdapter().getPassword());
-        }
+        auth.setUsername(this.config.getStorageAdapter().getUsername());
+        auth.setPassword(this.config.getStorageAdapter().getPassword());
         authMessage.setAuthentication(auth);
     }
 
@@ -394,6 +455,7 @@ public class FeedCommProcessor implements WebSocketListener {
         }
 
         if (newReconnectJob != null) {
+            log.debugf("Starting WebSocket reconnect thread");
             newReconnectJob.start();
         }
     }
@@ -401,6 +463,7 @@ public class FeedCommProcessor implements WebSocketListener {
     private void stopReconnectJobThread() {
         ReconnectJobThread reconnectJob = reconnectJobThread.getAndSet(null);
         if (reconnectJob != null) {
+            log.debugf("Stopping WebSocket reconnect thread");
             reconnectJob.interrupt();
         }
     }
@@ -439,4 +502,68 @@ public class FeedCommProcessor implements WebSocketListener {
             }
         }
     }
+
+    private void startPinging() {
+        synchronized (pingExecutor) {
+            stopPinging(); // cleans up anything left over from previous pinging
+
+            log.debugf("Starting WebSocket ping");
+            pingFuture = pingExecutor.scheduleAtFixedRate(
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            if (isConnected()) {
+                                try {
+                                    webSocket.sendPing(createPingBuffer());
+                                } catch (IOException ioe) {
+                                    log.debugf("Failed to send ping. Cause=%s", ioe.toString());
+                                    disconnect(4000, "Ping failed"); // sendPing javadoc says to close on IOException
+                                } catch (IllegalStateException ise) {
+                                    log.debugf("Cannot ping. WebSocket is already closed. Cause=%s", ise.toString());
+                                } catch (Exception e) {
+                                    // Catch other problems so exception is not thrown which would stop the thread.
+                                    // This will cover a race condition where webSocket may be null.
+                                    log.debugf("Cannot ping. Cause=%s", e.toString());
+                                }
+                            }
+                        }
+                    }, 5, 5, TimeUnit.SECONDS);
+        }
+    }
+
+    private void stopPinging() {
+        synchronized (pingExecutor) {
+            if (pingFuture != null) {
+                log.debugf("Stopping WebSocket ping");
+                pingFuture.cancel(true);
+                pingFuture = null;
+            }
+        }
+    }
+
+    /**
+     * Call this when you know the feed comm processor object will never be used again
+     * and thus the ping executor will also never be used again.
+     */
+    private void destroyPingExecutor() {
+        synchronized (pingExecutor) {
+            if (!pingExecutor.isShutdown()) {
+                try {
+                    log.debugf("Shutting down WebSocket ping executor");
+                    pingExecutor.shutdown();
+                    if (!pingExecutor.awaitTermination(1, TimeUnit.SECONDS)) {
+                        pingExecutor.shutdownNow();
+                    }
+                } catch (Throwable t) {
+                    log.warnf("Cannot shut down WebSocket ping executor. Cause=%s", t.toString());
+                }
+            }
+        }
+    }
+
+    @SuppressWarnings("resource")
+    private Buffer createPingBuffer() {
+        return new Buffer().writeUtf8("hawkular-ping");
+    }
+
 }

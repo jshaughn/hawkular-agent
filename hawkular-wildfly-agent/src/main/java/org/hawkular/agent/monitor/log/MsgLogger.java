@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2015-2017 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,12 +16,14 @@
  */
 package org.hawkular.agent.monitor.log;
 
+import java.util.Collection;
 import java.util.List;
 
 import javax.management.MalformedObjectNameException;
 
 import org.hawkular.agent.monitor.extension.MonitorServiceConfiguration.StorageReportTo;
 import org.hawkular.agent.monitor.inventory.MonitoredEndpoint;
+import org.hawkular.agent.monitor.inventory.Name;
 import org.hawkular.agent.monitor.protocol.EndpointService;
 import org.hawkular.agent.monitor.protocol.ProtocolException;
 import org.jboss.logging.BasicLogger;
@@ -39,15 +41,15 @@ public interface MsgLogger extends BasicLogger {
     MsgLogger LOG = Logger.getMessageLogger(MsgLogger.class, "org.hawkular.agent.monitor");
 
     @LogMessage(level = Level.INFO)
-    @Message(id = 10000, value = "Starting Hawkular Monitor service")
+    @Message(id = 10000, value = "Starting Hawkular WildFly Agent service")
     void infoStarting();
 
     @LogMessage(level = Level.INFO)
-    @Message(id = 10001, value = "Stopping Hawkular Monitor service")
+    @Message(id = 10001, value = "Stopping Hawkular WildFly Agent service")
     void infoStopping();
 
     @LogMessage(level = Level.INFO)
-    @Message(id = 10002, value = "Hawkular Monitor subsystem is disabled; service will not be started")
+    @Message(id = 10002, value = "Hawkular WildFly Agent subsystem is disabled; service will not be started")
     void infoSubsystemDisabled();
 
     @LogMessage(level = Level.INFO)
@@ -147,8 +149,8 @@ public interface MsgLogger extends BasicLogger {
     void errorCannotDoAnythingWithoutFeed(@Cause Throwable t);
 
     @LogMessage(level = Level.ERROR)
-    @Message(id = 10027, value = "To use standalone Hawkular Metrics, you must configure a tenant ID")
-    void errorMustHaveTenantIdConfigured();
+    @Message(id = 10027, value = "unused")
+    void error10027();
 
     @LogMessage(level = Level.ERROR)
     @Message(id = 10028, value = "Cannot start storage adapter; aborting startup")
@@ -223,8 +225,7 @@ public interface MsgLogger extends BasicLogger {
     void infoNoPlatformConfig();
 
     @LogMessage(level = Level.ERROR)
-    @Message(id = 10046,
-            value = "Got response code [%d] when storing entity of type [%s] under path [%s] to inventory")
+    @Message(id = 10046, value = "Got response code [%d] when storing entity of type [%s] under path [%s] to inventory")
     void errorFailedToStorePathToInventory(int code, String entityType, String path);
 
     @LogMessage(level = Level.WARN)
@@ -239,14 +240,13 @@ public interface MsgLogger extends BasicLogger {
     @Message(id = 10049, value = "Could not access resources of endpoint [%s]")
     void errorCouldNotAccess(EndpointService<?, ?> endpoint, @Cause Throwable e);
 
-    @LogMessage(level = Level.ERROR)
-    @Message(id = 10050, value = "The tenant ID [%s] set in the agent configuration does not match the"
-            + " tenant ID [%s] retrieved from Hawkular Accounts.")
-    void errorWrongTenantId(String tenantIdXml, String tenantIdAccounts);
+    @LogMessage(level = Level.INFO)
+    @Message(id = 10050, value = "Tenant ID [%s]")
+    void infoTenantId(String tenantId);
 
     @LogMessage(level = Level.ERROR)
-    @Message(id = 10051, value = "The tenant ID could not be retrieved from Hawkular Accounts")
-    void errorNoTenantIdFromAccounts();
+    @Message(id = 10051, value = "Missing tenant ID")
+    void errorNoTenantIdSpecified();
 
     @LogMessage(level = Level.ERROR)
     @Message(id = 10052, value = "Could not store metrics for monitored endpoint [%s]")
@@ -293,24 +293,24 @@ public interface MsgLogger extends BasicLogger {
     void errorInvalidQueueElement(Class<?> Element);
 
     @LogMessage(level = Level.INFO)
-    @Message(id = 10063, value = "Feed ID has been registered [%s]")
-    void infoUsingFeedId(String id);
+    @Message(id = 10063, value = "Feed ID [%s] has been registered under tenant ID [%s]")
+    void infoUsingFeedId(String id, String tenantId);
 
     @LogMessage(level = Level.ERROR)
-    @Message(id = 10064, value = "Server gave us a feed ID [%s] but we wanted [%s]")
-    void errorUnwantedFeedId(String acquiredFeedId, String desiredFeedId);
+    @Message(id = 10064, value = "Server gave us a feed ID [%s] but we wanted [%s] under tenant ID [%s]")
+    void errorUnwantedFeedId(String acquiredFeedId, String desiredFeedId, String tenantId);
 
     @LogMessage(level = Level.INFO)
     @Message(id = 10065, value = "Received request to perform [%s] on a [%s] given by inventory path [%s]")
     void infoReceivedResourcePathCommand(String operationName, String entityType, String resourcePath);
 
-    @LogMessage(level = Level.INFO)
+    @LogMessage(level = Level.DEBUG) // making DEBUG as this gets noisy if you run discovery often enough
     @Message(id = 10066, value = "Being asked to discover all resources for endpoint [%s]")
     void infoDiscoveryRequested(MonitoredEndpoint<?> monitoredEndpoint);
 
     @LogMessage(level = Level.INFO)
-    @Message(id = 10067, value = "Feed ID [%s] was already registered; it will be reused")
-    void infoFeedIdAlreadyRegistered(String feedId);
+    @Message(id = 10067, value = "Feed ID [%s] was already registered under tenant ID [%s]; it will be reused")
+    void infoFeedIdAlreadyRegistered(String feedId, String tenantId);
 
     @LogMessage(level = Level.INFO)
     @Message(id = 10068, value = "Agent is already stopped.")
@@ -320,4 +320,53 @@ public interface MsgLogger extends BasicLogger {
     @Message(id = 10069, value = "Cannot get tenant ID. Will retry in 60 seconds. Error=[%s]")
     void errorRetryTenantId(String errorMsg);
 
+    @LogMessage(level = Level.INFO)
+    @Message(id = 10070, value = "")
+    void info10070();
+
+    @LogMessage(level = Level.INFO)
+    @Message(id = 10071, value = "No longer monitoring the endpoint [%s]")
+    void infoRemovedEndpointService(String id);
+
+    @LogMessage(level = Level.INFO)
+    @Message(id = 10072, value = "")
+    void info10072();
+
+    @LogMessage(level = Level.INFO)
+    @Message(id = 10073, value = "Now monitoring the new endpoint [%s]")
+    void infoAddedEndpointService(String string);
+
+    @LogMessage(level = Level.ERROR)
+    @Message(id = 10074, value = "The resource type [%s] is missing a parent. "
+            + "Make sure at least one of these resource types are defined and enabled: %s")
+    void errorInvalidRootResourceType(String idString, Collection<Name> parents);
+
+    @LogMessage(level = Level.WARN)
+    @Message(id = 10075, value = "Cannot register feed ID [%s] under tenant ID [%s] via URL [%s]: %s")
+    void warnCannotRegisterFeed(String feedId, String tenantId, String url, String message);
+
+    @LogMessage(level = Level.WARN)
+    @Message(id = 10076, value = "Cannot register feed under tenant ID [%s] for new managed server [%s]: %s")
+    void warnCannotRegisterFeedForNewManagedServer(String tenantId, String managedServerName, String error);
+
+    @LogMessage(level = Level.ERROR)
+    @Message(id = 10077, value = "Failed to store metric tags: %s")
+    void errorFailedToStoreMetricTags(@Cause Throwable t, String data);
+
+    @LogMessage(level = Level.WARN)
+    @Message(id = 10078, value = "Tried %d times to reach the server %s endpoint at %s. Is it up?")
+    void warnConnectionDelayed(int count, String what, String url);
+
+    @LogMessage(level = Level.INFO)
+    @Message(id = 10079, value = "Agent being asked to start when it is already starting up. "
+            + "Will shutdown and try the startup again.")
+    void infoInterruptStartAndStartAgain();
+
+    @LogMessage(level = Level.INFO)
+    @Message(id = 10080, value = "Agent has been configured to be immutable")
+    void infoAgentIsImmutable();
+
+    @LogMessage(level = Level.WARN)
+    @Message(id = 10081, value = "Cannot get Hawkular Server status - does the agent have proper credentials? (%d/%s)")
+    void warnBadHawkularCredentials(int code, String message);
 }

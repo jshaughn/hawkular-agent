@@ -29,41 +29,41 @@ public interface RemoteJMXAttributes {
 
     SimpleAttributeDefinition ENABLED = new SimpleAttributeDefinitionBuilder("enabled",
             ModelType.BOOLEAN)
-            .setAllowNull(true)
-            .setDefaultValue(new ModelNode(true))
-            .setAllowExpression(true)
-            .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-            .build();
+                    .setAllowNull(true)
+                    .setDefaultValue(new ModelNode(true))
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_NONE)
+                    .build();
 
     SimpleAttributeDefinition URL = new SimpleAttributeDefinitionBuilder("url",
             ModelType.STRING)
-            .setAllowNull(false)
-            .setAllowExpression(true)
-            .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-            .build();
+                    .setAllowNull(false)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
 
     SimpleAttributeDefinition USERNAME = new SimpleAttributeDefinitionBuilder("username",
             ModelType.STRING)
-            .setAllowNull(true)
-            .setAllowExpression(true)
-            .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-            .build();
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
 
     SimpleAttributeDefinition PASSWORD = new SimpleAttributeDefinitionBuilder("password",
             ModelType.STRING)
-            .setAllowNull(true)
-            .setAllowExpression(true)
-            .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-            .build();
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
 
-    SimpleAttributeDefinition SECURITY_REALM = new SimpleAttributeDefinitionBuilder("securityRealm",
+    SimpleAttributeDefinition SECURITY_REALM = new SimpleAttributeDefinitionBuilder("security-realm",
             ModelType.STRING)
-            .setAllowNull(true)
-            .setAllowExpression(true)
-            .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-            .build();
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
 
-    SimpleAttributeDefinition SET_AVAIL_ON_SHUTDOWN = new SimpleAttributeDefinitionBuilder("setAvailOnShutdown",
+    SimpleAttributeDefinition SET_AVAIL_ON_SHUTDOWN = new SimpleAttributeDefinitionBuilder("set-avail-on-shutdown",
             ModelType.STRING)
                     .setAllowNull(true)
                     .setValidator(EnumValidator.create(Avail.class, true, true))
@@ -71,13 +71,33 @@ public interface RemoteJMXAttributes {
                     .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
                     .build();
 
-    SimpleAttributeDefinition RESOURCE_TYPE_SETS = new SimpleAttributeDefinitionBuilder(
-            "resourceTypeSets",
+    SimpleAttributeDefinition RESOURCE_TYPE_SETS = new SimpleAttributeDefinitionBuilder("resource-type-sets",
             ModelType.STRING)
-            .setAllowNull(true)
-            .setAllowExpression(true)
-            .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
-            .build();
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
+    SimpleAttributeDefinition TENANT_ID = new SimpleAttributeDefinitionBuilder("tenant-id",
+            ModelType.STRING)
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
+    SimpleAttributeDefinition METRIC_ID_TEMPLATE = new SimpleAttributeDefinitionBuilder("metric-id-template",
+            ModelType.STRING)
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
+
+    SimpleAttributeDefinition METRIC_TAGS = new SimpleAttributeDefinitionBuilder("metric-tags",
+            ModelType.STRING)
+                    .setAllowNull(true)
+                    .setAllowExpression(true)
+                    .addFlag(AttributeAccess.Flag.RESTART_RESOURCE_SERVICES)
+                    .build();
 
     AttributeDefinition[] ATTRIBUTES = {
             ENABLED,
@@ -86,6 +106,9 @@ public interface RemoteJMXAttributes {
             PASSWORD,
             SECURITY_REALM,
             SET_AVAIL_ON_SHUTDOWN,
-            RESOURCE_TYPE_SETS
+            RESOURCE_TYPE_SETS,
+            TENANT_ID,
+            METRIC_ID_TEMPLATE,
+            METRIC_TAGS
     };
 }
