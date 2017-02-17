@@ -109,6 +109,7 @@ public abstract class AbstractITest {
     protected static final File wfHome;
 
     protected static final Object waitForAccountsLock = new Object();
+    protected static final Object waitForAgentLock = new Object();
 
     static {
         String h = System.getProperty("hawkular.bind.address", "localhost");
@@ -634,6 +635,35 @@ public abstract class AbstractITest {
 
                 accountsAndInventoryReady = true;
             }
+        }
+    }
+
+    protected boolean waitForAgent(ModelControllerClient mcc) throws Throwable {
+        Address agentAddress = Address.parse("/subsystem=hawkular-wildfly-agent");
+        return waitForAgent(mcc, agentAddress);
+    }
+
+    protected boolean waitForAgent(ModelControllerClient mcc, Address agentAddress) throws Throwable {
+        synchronized (waitForAgentLock) {
+            String agentPath = agentAddress.toAddressPathString();
+            log.info("Checking [" + agentPath + "] status...");
+            int count = 0;
+            while (true && ++count <= 12) {
+                Thread.sleep(5000);
+
+                ModelNode op = JBossASClient.createRequest("status", agentAddress);
+                ModelNode result = new JBossASClient(mcc).execute(op);
+                if (JBossASClient.isSuccess(result)) {
+                    String status = JBossASClient.getResults(result).asString().toUpperCase();
+                    if ("STARTED".equals(status)) {
+                        log.info("Agent [" + agentPath + "] status=" + status + ", continuing...");
+                        return true;
+                    } else {
+                        log.info("Agent [" + agentPath + "] status=" + status + ", waiting...");
+                    }
+                }
+            }
+            return false;
         }
     }
 

@@ -244,7 +244,7 @@ public class MonitorService implements Service<MonitorService> {
     private final AtomicReference<Thread> startThread = new AtomicReference<Thread>();
 
     // Declared config found in standalone.xml. Only used to build the runtime configuration (see #configuration).
-    private final MonitorServiceConfiguration bootConfiguration;
+    private MonitorServiceConfiguration bootConfiguration;
 
     // Indicates if we are running in a standalone server or in a host controller (or something similar)
     private final ProcessType processType;
@@ -391,6 +391,7 @@ public class MonitorService implements Service<MonitorService> {
                     this.jndiObjectClassName = jndiObjectClassName;
                 }
 
+                @Override
                 public void transition(final ServiceController<? extends Object> controller,
                         final ServiceController.Transition transition) {
                     switch (transition) {
@@ -478,7 +479,7 @@ public class MonitorService implements Service<MonitorService> {
         class CustomPropertyChangeListener implements PropertyChangeListener {
             @Override
             public void propertyChange(PropertyChangeEvent evt) {
-                if (ControlledProcessState.State.RUNNING.equals(evt.getNewValue())) {
+                if (isRunning(evt.getNewValue())) {
                     startNow();
                 } else if (ControlledProcessState.State.STOPPING.equals(evt.getNewValue())) {
                     Thread oldThread = startThread.get();
@@ -496,6 +497,7 @@ public class MonitorService implements Service<MonitorService> {
                         try {
                             startMonitorService();
                         } catch (Throwable t) {
+                            log.debug("StartMonitorService catch block", t);
                         }
                     }
                 }, "Hawkular WildFly Agent Startup Thread");
@@ -508,20 +510,22 @@ public class MonitorService implements Service<MonitorService> {
 
                 newThread.start();
             }
-        }
 
+            private boolean isRunning(Object state) {
+                return state == State.RUNNING || state == State.RELOAD_REQUIRED || state == State.RESTART_REQUIRED;
+            }
+
+        }
         // deferred startup: must wait for server to be running before we can monitor the subsystems
         ControlledProcessStateService stateService = processStateValue.getValue();
         CustomPropertyChangeListener listener = new CustomPropertyChangeListener();
         serverStateListener = listener;
         stateService.addPropertyChangeListener(serverStateListener);
-
         // if the server is already started, we need to restart now. Otherwise, we'll start when the
         // server tells us it is running in our change listener above.
-        if (stateService.getCurrentState() == State.RUNNING) {
+        if (listener.isRunning(stateService.getCurrentState())) {
             listener.startNow();
         }
-
     }
 
     @Override
@@ -533,6 +537,16 @@ public class MonitorService implements Service<MonitorService> {
      * Starts this service. If the service is already started, this method is a no-op.
      */
     public void startMonitorService() {
+        startMonitorService(null);
+    }
+
+    /**
+     * Starts this service. If the service is already started, this method is a no-op.
+     *
+     * @param newBootConfiguration if not null is used to build the runtime configuration. Use this to reflect
+     * changes in the persisted configuration (standalone.xml) since service creation.
+     */
+    public void startMonitorService(MonitorServiceConfiguration newBootConfiguration) {
         if (isMonitorServiceStarted()) {
             return; // we are already started
         }
@@ -560,6 +574,10 @@ public class MonitorService implements Service<MonitorService> {
             }
 
             log.infoStarting();
+
+            if (null != newBootConfiguration) {
+                this.bootConfiguration = newBootConfiguration;
+            }
 
             this.configuration = buildRuntimeConfiguration(
                     this.bootConfiguration,
@@ -799,7 +817,7 @@ public class MonitorService implements Service<MonitorService> {
             long now = System.currentTimeMillis();
             Set<AvailDataPoint> datapoints = new HashSet<AvailDataPoint>();
             for (EndpointService<?, ?> endpointService : availsToChange.keySet()) {
-                EndpointConfiguration config = (EndpointConfiguration) endpointService.getMonitoredEndpoint()
+                EndpointConfiguration config = endpointService.getMonitoredEndpoint()
                         .getEndpointConfiguration();
                 Avail setAvailOnShutdown = config.getSetAvailOnShutdown();
                 if (setAvailOnShutdown != null) {
@@ -822,7 +840,7 @@ public class MonitorService implements Service<MonitorService> {
         Map<EndpointService<?, ?>, List<MeasurementInstance<?, AvailType<?>>>> avails = new HashMap<>();
         for (ProtocolService<?, ?> protocolService : protocolServices.getServices()) {
             for (EndpointService<?, ?> endpointService : protocolService.getEndpointServices().values()) {
-                EndpointConfiguration config = (EndpointConfiguration) endpointService.getMonitoredEndpoint()
+                EndpointConfiguration config = endpointService.getMonitoredEndpoint()
                         .getEndpointConfiguration();
                 Avail setAvailOnShutdown = config.getSetAvailOnShutdown();
                 if (setAvailOnShutdown != null) {
