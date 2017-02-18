@@ -19,6 +19,7 @@ package org.hawkular.agent.monitor.extension;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.hawkular.agent.monitor.service.MonitorService;
+import org.hawkular.agent.monitor.service.ServiceStatus;
 import org.hawkular.agent.monitor.util.WildflyCompatibilityUtils;
 import org.jboss.as.controller.OperationContext;
 import org.jboss.as.controller.OperationFailedException;
@@ -47,10 +48,9 @@ public class OperationSubsystemStart implements OperationStepHandler {
             final boolean refresh = model.get("refresh").asBoolean(false);
             final boolean restart = refresh || model.get("restart").asBoolean(false);
             final long delay = model.get("delay").asLong(0L);
-            final PathAddress address = refresh ?
-                    WildflyCompatibilityUtils.getCurrentAddress(opContext, model) : null;
-            final ModelNode config = refresh ?
-                    Resource.Tools.readModel(opContext.readResourceFromRoot(address)) : null;
+            final PathAddress address = refresh ? WildflyCompatibilityUtils.getCurrentAddress(opContext, model) : null;
+            final ModelNode config = refresh ? Resource.Tools.readModel(opContext.readResourceFromRoot(address))
+                    : null;
             final MonitorServiceConfiguration newConfig = refresh
                     ? new MonitorServiceConfigurationBuilder(config, opContext).build() : null;
 
@@ -62,13 +62,13 @@ public class OperationSubsystemStart implements OperationStepHandler {
                             Thread.sleep(delay);
                         }
 
-                        if (restart && service.isMonitorServiceStarted()) {
+                        if (restart) {
                             LOGGER.warnf("Stopping Hawkular Monitor Service now, %s requested.",
                                     refresh ? "refresh" : "restart");
                             service.stopMonitorService();
                         }
 
-                        if (service.isMonitorServiceStarted()) {
+                        if (service.getMonitorServiceStatus() == ServiceStatus.RUNNING) {
                             LOGGER.warn("Skipping Hawkular Monitor Service start, it is already started.");
                         } else {
                             LOGGER.warn("Starting Hawkular Monitor Service now.");

@@ -44,6 +44,7 @@ import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.sasl.RealmCallback;
 
 import org.hawkular.agent.monitor.protocol.dmr.DMREndpointService;
+import org.hawkular.agent.monitor.service.ServiceStatus;
 import org.hawkular.bus.common.BasicMessageWithExtraData;
 import org.hawkular.cmdgw.api.ApiDeserializer;
 import org.hawkular.cmdgw.api.WelcomeResponse;
@@ -655,7 +656,7 @@ public abstract class AbstractITest {
                 ModelNode result = new JBossASClient(mcc).execute(op);
                 if (JBossASClient.isSuccess(result)) {
                     String status = JBossASClient.getResults(result).asString().toUpperCase();
-                    if ("STARTED".equals(status)) {
+                    if (ServiceStatus.RUNNING.name().equals(status)) {
                         log.info("Agent [" + agentPath + "] status=" + status + ", continuing...");
                         return true;
                     } else {
