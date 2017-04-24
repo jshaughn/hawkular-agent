@@ -188,40 +188,49 @@ public class ITestHelper {
         return inventoryStructure.map(struct -> (Blueprint) struct.get(path.relativeTo(itemPath)));
     }
 
-    public Map<CanonicalPath, Blueprint> getBlueprintsByType(String feedId, String type) throws Throwable {
-        // Fetch metrics by tag
-        String url = baseInvUri + "/raw/query";
-        String tags = "module:inventory,type:r,feed:" + feedId + ",restypes:.*|" + type + "|.*";
-        String params = "{\"tags\":\"" + tags + "\"," +
-                "\"fromEarliest\":true," +
-                "\"order\":\"DESC\"}";
-        String response = getWithRetries(newAuthRequest()
-                .url(url)
-                .post(RequestBody.create(MediaType.parse("application/json"), params))
-                .build());
-        if (response.isEmpty()) {
-            return new HashMap<>();
-        }
+    public Map<CanonicalPath, Blueprint> getBlueprintsByType(String feedId, String type, int expectedCount)
+            throws Throwable {
+        for (int attempt = 0; attempt < ATTEMPT_COUNT; attempt++) {
+            // Fetch metrics by tag
+            String url = baseInvUri + "/raw/query";
+            String tags = "module:inventory,type:r,feed:" + feedId + ",restypes:.*|" + type + "|.*";
+            String params = "{\"tags\":\"" + tags + "\"," +
+                    "\"fromEarliest\":true," +
+                    "\"order\":\"DESC\"}";
+            String response = getWithRetries(newAuthRequest()
+                    .url(url)
+                    .post(RequestBody.create(MediaType.parse("application/json"), params))
+                    .build());
+            if (response.isEmpty()) {
+                return new HashMap<>();
+            }
 
-        // Now find each collected resource path in their belonging InventoryStructure
-        List<ExtendedInventoryStructure> structures = extractStructuresFromResponse(response);
-        Map<CanonicalPath, Blueprint> matchingResources = new HashMap<>();
-        CanonicalPath feedPath = feedPath(feedId).get();
-        structures.forEach(structure -> {
-            Collection<String> childResources = structure.getTypesIndex().get(type);
-            if (childResources != null) {
-                CanonicalPath rootPath = feedPath.modified().extend(SegmentType.r, structure.getStructure().getRoot().getId()).get();
-                for (String resourcePath : childResources) {
-                    RelativePath relativePath = RelativePath.fromString(resourcePath);
-                    Blueprint bp = structure.getStructure().get(relativePath);
-                    if (bp != null) {
-                        CanonicalPath absolutePath = relativePath.applyTo(rootPath);
-                        matchingResources.put(absolutePath, bp);
+            // Now find each collected resource path in their belonging InventoryStructure
+            List<ExtendedInventoryStructure> structures = extractStructuresFromResponse(response);
+            Map<CanonicalPath, Blueprint> matchingResources = new HashMap<>();
+            CanonicalPath feedPath = feedPath(feedId).get();
+            structures.forEach(structure -> {
+                Collection<String> childResources = structure.getTypesIndex().get(type);
+                if (childResources != null) {
+                    CanonicalPath rootPath = feedPath.modified()
+                            .extend(SegmentType.r, structure.getStructure().getRoot().getId()).get();
+                    for (String resourcePath : childResources) {
+                        RelativePath relativePath = RelativePath.fromString(resourcePath);
+                        Blueprint bp = structure.getStructure().get(relativePath);
+                        if (bp != null) {
+                            CanonicalPath absolutePath = relativePath.applyTo(rootPath);
+                            matchingResources.put(absolutePath, bp);
+                        }
                     }
                 }
+            });
+
+            if (matchingResources.size() >= expectedCount) {
+                return matchingResources;
             }
-        });
-        return matchingResources;
+        }
+
+        throw new IllegalStateException("Cannot get expected number of resources. Retries have been exceeded.");
     }
 
     public String getWithRetries(String url) throws Throwable {
@@ -250,34 +259,39 @@ public class ITestHelper {
         throw e;
     }
 
-    public Map.Entry<CanonicalPath, Blueprint> waitForResourceContaining(String feed, String rType, String containing, long sleep, int attempts)
+    public Map.Entry<CanonicalPath, Blueprint> waitForResourceContaining(String feed, String rType, String containing,
+            long sleep, int attempts)
             throws Throwable {
         for (int i = 0; i < attempts; i++) {
-            Optional<Map.Entry<CanonicalPath, Blueprint>> resource = getBlueprintsByType(feed, rType)
+            Optional<Map.Entry<CanonicalPath, Blueprint>> resource = getBlueprintsByType(feed, rType, 0)
                     .entrySet().stream()
-                    .filter(e -> containing == null || ((Entity.Blueprint) (e.getValue())).getId().contains(containing))
+                    .filter(e -> containing == null
+                            || ((Entity.Blueprint) (e.getValue())).getId().contains(containing))
                     .findFirst();
             if (resource.isPresent()) {
                 return resource.get();
             }
             Thread.sleep(sleep);
         }
-        throw new AssertionError("Resource [type=" + rType + ", containing=" + containing + "] not found after " + attempts + " attempts.");
+        throw new AssertionError("Resource [type=" + rType + ", containing=" + containing + "] not found after "
+                + attempts + " attempts.");
     }
 
     public void waitForNoResourceContaining(String feed, String rType, String containing, long sleep, int attempts)
             throws Throwable {
         for (int i = 0; i < attempts; i++) {
-            Optional<Map.Entry<CanonicalPath, Blueprint>> resource = getBlueprintsByType(feed, rType)
+            Optional<Map.Entry<CanonicalPath, Blueprint>> resource = getBlueprintsByType(feed, rType, 0)
                     .entrySet().stream()
-                    .filter(e -> containing == null || ((Entity.Blueprint) (e.getValue())).getId().contains(containing))
+                    .filter(e -> containing == null
+                            || ((Entity.Blueprint) (e.getValue())).getId().contains(containing))
                     .findFirst();
             if (!resource.isPresent()) {
                 return;
             }
             Thread.sleep(sleep);
         }
-        throw new AssertionError("Resource [type=" + rType + ", containing=" + containing + "] still found after " + attempts + " attempts.");
+        throw new AssertionError("Resource [type=" + rType + ", containing=" + containing + "] still found after "
+                + attempts + " attempts.");
     }
 
     public CanonicalPath.FeedBuilder feedPath(String feedId) {

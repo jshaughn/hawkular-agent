@@ -413,7 +413,8 @@ public abstract class AbstractITest {
      * @return path of hawkular wildfly server resource
      */
     protected CanonicalPath getHawkularWildFlyServerResourcePath() throws Throwable {
-        Map<CanonicalPath, Blueprint> wildflyServers = testHelper.getBlueprintsByType(hawkularFeedId, "WildFly Server");
+        Map<CanonicalPath, Blueprint> wildflyServers = testHelper.getBlueprintsByType(hawkularFeedId, "WildFly Server",
+                1);
         AssertJUnit.assertEquals(1, wildflyServers.size());
         return wildflyServers.keySet().iterator().next();
     }
@@ -425,7 +426,8 @@ public abstract class AbstractITest {
      * @return path of host controller
      */
     protected CanonicalPath getHostController(WildFlyClientConfig hostControllerClientConfig) throws Throwable {
-        Map<CanonicalPath, Blueprint> hcs = testHelper.getBlueprintsByType(hostControllerClientConfig.getFeedId(), "Host Controller");
+        Map<CanonicalPath, Blueprint> hcs = testHelper.getBlueprintsByType(hostControllerClientConfig.getFeedId(),
+                "Host Controller", 1);
         AssertJUnit.assertEquals(1, hcs.size());
         return hcs.keySet().iterator().next();
     }

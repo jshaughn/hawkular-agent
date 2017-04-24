@@ -37,9 +37,9 @@ public class HawkularWildFlyAgentContextITest extends AbstractCommandITest {
         waitForAccountsAndInventory();
 
         // this should not exist yet
-        Optional<?> resource = testHelper.getBlueprintsByType(hawkularFeedId, "MyAppResourceType")
+        Optional<?> resource = testHelper.getBlueprintsByType(hawkularFeedId, "MyAppResourceType", 1)
                 .entrySet().stream()
-                .filter(e -> ((Entity.Blueprint)(e.getValue())).getId().contains("ITest Resource ID"))
+                .filter(e -> ((Entity.Blueprint) (e.getValue())).getId().contains("ITest Resource ID"))
                 .findFirst();
         Assert.assertFalse(resource.isPresent());
 

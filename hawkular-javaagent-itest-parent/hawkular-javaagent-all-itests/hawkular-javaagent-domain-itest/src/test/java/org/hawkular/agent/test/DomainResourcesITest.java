@@ -50,11 +50,11 @@ public class DomainResourcesITest extends AbstractDomainITestSuite {
     public void hostsInInventory() throws Throwable {
         String feedId = hawkularFeedId;
 
-        Collection<Blueprint> servers = testHelper.getBlueprintsByType(feedId, "Domain Host").values();
+        Collection<Blueprint> servers = testHelper.getBlueprintsByType(feedId, "Domain Host", 1).values();
         Collection<String> dmrHostNames = getHostNames();
         for (String hostName : dmrHostNames) {
             boolean hasMatch = servers.stream().anyMatch(bp -> bp instanceof Entity.Blueprint
-                    && ((Entity.Blueprint)bp).getId().contains(hostName));
+                    && ((Entity.Blueprint) bp).getId().contains(hostName));
             Assert.assertTrue("No match for " + hostName, hasMatch);
             System.out.println("domain host in inventory=" + hostName);
         }
@@ -87,11 +87,12 @@ public class DomainResourcesITest extends AbstractDomainITestSuite {
 
     @Test(groups = { GROUP }, dependsOnMethods = { "wfStarted" })
     public void serversInInventory() throws Throwable {
-        Collection<Blueprint> servers = testHelper.getBlueprintsByType(hawkularFeedId, "Domain WildFly Server").values();
+        Collection<Blueprint> servers = testHelper.getBlueprintsByType(hawkularFeedId, "Domain WildFly Server", 3)
+                .values();
         Collection<String> dmrServerNames = getServerNames();
         for (String serverName : dmrServerNames) {
             boolean hasMatch = servers.stream().anyMatch(bp -> bp instanceof Entity.Blueprint
-                    && ((Entity.Blueprint)bp).getId().contains(serverName));
+                    && ((Entity.Blueprint) bp).getId().contains(serverName));
             Assert.assertTrue(hasMatch);
             System.out.println("domain server in inventory=" + serverName);
         }
@@ -105,11 +106,12 @@ public class DomainResourcesITest extends AbstractDomainITestSuite {
 
     @Test(groups = { GROUP }, dependsOnMethods = { "wfStarted" })
     public void serverGroupsInInventory() throws Throwable {
-        Collection<Blueprint> servers = testHelper.getBlueprintsByType(hawkularFeedId, "Domain Server Group").values();
+        Collection<Blueprint> servers = testHelper.getBlueprintsByType(hawkularFeedId, "Domain Server Group", 2)
+                .values();
         Collection<String> dmrServerGroupNames = getServerGroupNames();
         for (String groupName : dmrServerGroupNames) {
             boolean hasMatch = servers.stream().anyMatch(bp -> bp instanceof Entity.Blueprint
-                    && ((Entity.Blueprint)bp).getId().contains(groupName));
+                    && ((Entity.Blueprint) bp).getId().contains(groupName));
             Assert.assertTrue(hasMatch);
             System.out.println("domain server group in inventory=" + groupName);
         }
@@ -203,11 +205,12 @@ public class DomainResourcesITest extends AbstractDomainITestSuite {
 
     @Test(groups = { GROUP }, dependsOnMethods = { "wfStarted" })
     public void profilesInInventory() throws Throwable {
-        Collection<Blueprint> blueprints = testHelper.getBlueprintsByType(hawkularFeedId, "Domain Profile").values();
+        Collection<Blueprint> blueprints = testHelper.getBlueprintsByType(hawkularFeedId, "Domain Profile", 4)
+                .values();
         Collection<String> dmrProfileNames = getProfileNames();
         for (String profileName : dmrProfileNames) {
             boolean hasMatch = blueprints.stream().anyMatch(bp -> bp instanceof Entity.Blueprint
-                    && ((Entity.Blueprint)bp).getId().contains(profileName));
+                    && ((Entity.Blueprint) bp).getId().contains(profileName));
             Assert.assertTrue(hasMatch);
             System.out.println("domain profile in inventory=" + profileName);
         }
@@ -222,11 +225,12 @@ public class DomainResourcesITest extends AbstractDomainITestSuite {
 
     @Test(groups = { GROUP }, dependsOnMethods = { "wfStarted" })
     public void socketBindingGroupsInInventory() throws Throwable {
-        Collection<Blueprint> blueprints = testHelper.getBlueprintsByType(hawkularFeedId, "Socket Binding Group").values();
+        Collection<Blueprint> blueprints = testHelper.getBlueprintsByType(hawkularFeedId, "Socket Binding Group", 4)
+                .values();
         Collection<String> dmrSBGNames = getSocketBindingGroupNames();
         for (String sbgName : dmrSBGNames) {
             boolean hasMatch = blueprints.stream().anyMatch(bp -> bp instanceof Entity.Blueprint
-                    && ((Entity.Blueprint)bp).getId().contains(sbgName));
+                    && ((Entity.Blueprint) bp).getId().contains(sbgName));
             Assert.assertTrue(hasMatch);
             System.out.println("socket binding group in inventory=" + sbgName);
         }
