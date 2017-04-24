@@ -39,7 +39,7 @@ public class UpdateCollectionIntervalsCommandITest extends AbstractCommandITest 
 
         waitForAgentViaJMX();
 
-        CanonicalPath agentPath = testHelper.getBlueprintsByType(hawkularFeedId, "Hawkular WildFly Agent")
+        CanonicalPath agentPath = testHelper.getBlueprintsByType(hawkularFeedId, "Hawkular WildFly Agent", 1)
                 .keySet().iterator().next();
 
         // check we are starting with our original defaults - this is just a sanity check

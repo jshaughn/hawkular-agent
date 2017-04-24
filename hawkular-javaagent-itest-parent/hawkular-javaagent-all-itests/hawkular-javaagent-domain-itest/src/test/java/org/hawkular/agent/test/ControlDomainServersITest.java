@@ -48,9 +48,9 @@ public class ControlDomainServersITest extends AbstractDomainITestSuite {
         }
 
         CanonicalPath wfPath = getHostController();
-        CanonicalPath agentPath = testHelper.getBlueprintsByType(hawkularFeedId, "Domain WildFly Server Controller")
+        CanonicalPath agentPath = testHelper.getBlueprintsByType(hawkularFeedId, "Domain WildFly Server Controller", 1)
                 .entrySet().stream()
-                .filter(e -> ((Entity.Blueprint)(e.getValue())).getId().contains(serverToTest))
+                .filter(e -> ((Entity.Blueprint) (e.getValue())).getId().contains(serverToTest))
                 .map(Map.Entry::getKey)
                 .findFirst()
                 .get();
