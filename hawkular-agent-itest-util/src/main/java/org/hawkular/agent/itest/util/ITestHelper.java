@@ -228,6 +228,8 @@ public class ITestHelper {
             if (matchingResources.size() >= expectedCount) {
                 return matchingResources;
             }
+
+            Thread.sleep(ATTEMPT_DELAY);
         }
 
         throw new IllegalStateException("Cannot get expected number of resources. Retries have been exceeded.");
