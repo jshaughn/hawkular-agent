@@ -42,7 +42,8 @@ public class LocalAndRemoteJmxITest extends AbstractITest {
         waitForAccountsAndInventory();
 
         // make sure the agent is there - this comes from the DMR managed server - just making sure that still works
-        Entity.Blueprint agent = (Entity.Blueprint) testHelper.getBlueprintsByType(hawkularFeedId, "Hawkular WildFly Agent")
+        Entity.Blueprint agent = (Entity.Blueprint) testHelper
+                .getBlueprintsByType(hawkularFeedId, "Hawkular WildFly Agent", 1)
                 .values().stream().findFirst().get();
         Assert.assertEquals(agent.getName(), "Hawkular WildFly Agent");
 
@@ -164,7 +165,8 @@ public class LocalAndRemoteJmxITest extends AbstractITest {
             if (gaugesResponse.code() == 200 && !gaugesResponse.body().string().isEmpty()) {
                 String url = baseMetricsUri + "/gauges/" + Util.urlEncode(id) + "/tags";
                 lastUrl = url;
-                Response tagsResponse = testHelper.client().newCall(testHelper.newAuthRequest().url(url).get().build()).execute();
+                Response tagsResponse = testHelper.client().newCall(testHelper.newAuthRequest().url(url).get().build())
+                        .execute();
                 if (tagsResponse.code() == 200) {
                     String tags = tagsResponse.body().string();
                     if (tags.equals(expectedTagsJson)) {
@@ -193,7 +195,8 @@ public class LocalAndRemoteJmxITest extends AbstractITest {
             if (gaugesResponse.code() == 200 && !gaugesResponse.body().string().isEmpty()) {
                 String url = baseMetricsUri + "/gauges/stats?buckets=1&metrics=" + Util.urlEncodeQuery(id);
                 lastUrl = url;
-                Response gaugeResponse = testHelper.client().newCall(testHelper.newAuthRequest().url(url).get().build()).execute();
+                Response gaugeResponse = testHelper.client()
+                        .newCall(testHelper.newAuthRequest().url(url).get().build()).execute();
                 if (gaugeResponse.code() == 200 && !gaugeResponse.body().string().isEmpty()) {
                     /* this should be enough to prove that some metric was written successfully */
                     return;

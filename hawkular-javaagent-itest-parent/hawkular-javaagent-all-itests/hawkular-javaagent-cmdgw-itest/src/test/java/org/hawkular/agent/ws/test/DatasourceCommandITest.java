@@ -279,9 +279,9 @@ public class DatasourceCommandITest extends AbstractCommandITest {
             assertResourceExists(mcc, dsAddress, true);
 
             // see that the resource has been persisted to hawkular-inventory
-            Optional<?> resource = testHelper.getBlueprintsByType(hawkularFeedId, "Datasource")
+            Optional<?> resource = testHelper.getBlueprintsByType(hawkularFeedId, "Datasource", 1)
                     .entrySet().stream()
-                    .filter(e -> ((Entity.Blueprint)(e.getValue())).getId().contains(datasourceName))
+                    .filter(e -> ((Entity.Blueprint) (e.getValue())).getId().contains(datasourceName))
                     .findFirst();
             Assert.assertTrue(resource.isPresent());
 
@@ -328,9 +328,9 @@ public class DatasourceCommandITest extends AbstractCommandITest {
             assertResourceExists(mcc, dsAddress, true);
 
             // see that the resource has been persisted to hawkular-inventory
-            Optional<?> resource = testHelper.getBlueprintsByType(hawkularFeedId, "XA Datasource")
+            Optional<?> resource = testHelper.getBlueprintsByType(hawkularFeedId, "XA Datasource", 1)
                     .entrySet().stream()
-                    .filter(e -> ((Entity.Blueprint)(e.getValue())).getId().contains(xaDatasourceName))
+                    .filter(e -> ((Entity.Blueprint) (e.getValue())).getId().contains(xaDatasourceName))
                     .findFirst();
             Assert.assertTrue(resource.isPresent());
 
